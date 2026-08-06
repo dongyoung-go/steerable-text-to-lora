@@ -1,0 +1,16 @@
+# DataConfig. See docs/03_training_validation.md §1.
+tasks_root: /home/dg793/text-to-lora/tasks
+train_tasks: [textgrad_repro_gsm8k_*]
+
+# Set from scripts/profile_lengths.py against the real tasks/tokenizer (2026-08-03):
+# overall prompt+response p99 = 2103, p50 = 518; many rows hit a hard ~2001-token cap from
+# how the Qwen3-32B responses were originally generated. inp_max_len=2560 gives 0% response
+# truncation (2048 still cuts 2.5% of rows) -- silent truncation would train on cut-off
+# <think> reasoning and look like a model problem, so headroom over the observed max (2181)
+# is worth the extra compute.
+inp_max_len: 2560
+
+n_tasks_per_batch: 4
+n_points_per_task: 4
+val_batch_size: 32
+cache_root: data/.cache

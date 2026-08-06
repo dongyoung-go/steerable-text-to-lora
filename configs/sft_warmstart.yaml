@@ -1,0 +1,22 @@
+# SFTConfig -- recon-warm-started ablation arm. `init_from` is set via
+# `scripts/train_sft.py --init-from outputs/checkpoints/recon/latest.pt` (overrides this file).
+# `freeze_backbone_lora_steps` gives the decoder heads a head start adapting to the SFT
+# objective before the conditioning distribution shifts underneath them (docs/03 handoff
+# gotcha #4, optional). See docs/03 §3/§4.
+#
+# max_steps/val_freq scaled down the same way as configs/sft.yaml -- see that file's comment
+# for the measured throughput this is based on (2026-08-03, 1x B200).
+lr_heads: 2.0e-5
+lr_backbone_lora: 2.0e-6
+lr_from_scratch: 1.0e-4
+warmup_frac: 0.03
+max_steps: 2000
+grad_accum: 4
+n_tasks_per_batch: 4
+n_points_per_task: 4
+l2_reg_generated_w: 1.0e-3
+val_freq: 500
+max_grad_norm: 1.0
+freeze_backbone_lora_steps: 100
+init_from: null
+seed: 0

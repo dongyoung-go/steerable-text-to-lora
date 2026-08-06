@@ -1,0 +1,17 @@
+# DataConfig -- textgrad_repro_v2 (non-<think>, 10-domain) dataset. See docs/03 §1 and the
+# 2026-08-04 changelog entry: same schema as configs/data.yaml, pointed at the tasks built by
+# scripts/build_tasks_from_textgrad_repro_v2.py instead of the original 11-way gsm8k split.
+tasks_root: /home/dg793/text-to-lora/tasks
+train_tasks: [textgrad_repro_v2_*]
+
+# scripts/profile_lengths.py against this data (2026-08-04): overall prompt+response
+# p99 = 1393, max = 2178 -- much shorter than the original <think>-laden data (old p99 was
+# ~2103 off a ~2001-token generation cap). Kept at 2560 anyway (0% truncation, same value as
+# configs/data.yaml) so results stay directly comparable to the original run rather than
+# introducing a second variable.
+inp_max_len: 2560
+
+n_tasks_per_batch: 4
+n_points_per_task: 4
+val_batch_size: 32
+cache_root: data/.cache_v2

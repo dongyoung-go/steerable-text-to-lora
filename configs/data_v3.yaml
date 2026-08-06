@@ -1,0 +1,22 @@
+# DataConfig -- v3 dataset. Same schema as configs/data_v2.yaml, but pointed at BOTH the
+# textgrad_repro_v3 tasks (scripts/build_tasks_from_textgrad_repro_v3.py) and the gepa_repro_v3
+# tasks (scripts/build_tasks_from_gepa_repro_v3.py). v3's builders emit one task dir (one oracle
+# LoRA) per distinct instruction seen in a task's optimization trajectory -- not one task per
+# task name with a single winning instruction -- so train_tasks below pulls in many more, smaller
+# task dirs (suffixed _d0, _d1, ...) than v2's glob did. Rows generated across iterations that
+# reused the identical instruction text (reverted textgrad rounds, repeated gepa candidates) are
+# still pooled within their group and deduped by (question, response) pair instead of question
+# alone. See the builders' docstrings for the full rationale.
+tasks_root: /home/dg793/text-to-lora/tasks
+train_tasks: [textgrad_repro_v3_*, gepa_repro_v3_*]
+
+# Inherited from configs/data_v2.yaml's profiled value (2026-08-04, p99=1393, max=2178 on the
+# non-pooled v2 data). Not yet re-profiled against the pooled v3 data -- do so by hand with
+# scripts/profile_lengths.py against the built v3 task dirs before/after the first real --full
+# run, same process v2 followed.
+inp_max_len: 2560
+
+n_tasks_per_batch: 4
+n_points_per_task: 4
+val_batch_size: 32
+cache_root: data/.cache_v3

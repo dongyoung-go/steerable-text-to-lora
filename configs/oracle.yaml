@@ -1,0 +1,17 @@
+# OracleConfig. See docs/03_training_validation.md §2, Stage A.
+#
+# r / lora_alpha / use_rslora / lora_dropout / target_modules MUST exactly match TargetSpec's
+# defaults (src/steerable_t2l/target_spec.py) -- canonicalize.py assumes both sides share the
+# same PEFT config to skip rescaling by `scaling`, and
+# oracle.train_oracle.build_oracle_peft_model asserts this field-by-field at run time.
+r: 8
+lora_alpha: 16
+use_rslora: false
+lora_dropout: 0.0
+target_modules: [q_proj, k_proj, v_proj, o_proj]
+
+lr: 1.0e-4
+max_steps: 500
+patience: 3
+val_freq: 25
+batch_size: 8

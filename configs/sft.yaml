@@ -1,0 +1,24 @@
+# SFTConfig -- from-scratch ablation arm (zero_init=True, flat lr). See docs/03 §3/§4.
+#
+# max_steps/val_freq scaled down from the doc's placeholder (20000/200) based on measured
+# real-hardware throughput on 2026-08-03 (1x B200, real 11-task GSM8K data, inp_max_len=2560,
+# target gradient checkpointing on): ~7.1s/optimizer-step (grad_accum=4 microbatches at
+# bs=16), ~9-10 min per full validation grid (11 tasks x ~5-6 conditions, one target forward
+# each). At 20000/200 that's ~39h of stepping + ~17h of validation per arm -- not tractable
+# for this pass. 2000 steps / val_freq 500 (4 validation passes) keeps one arm to
+# ~4-5h while still producing a real, non-trivial training signal. Increase both for a longer
+# follow-up run; nothing about the pipeline itself depends on these values.
+lr_heads: 2.0e-5
+lr_backbone_lora: 2.0e-6
+lr_from_scratch: 1.0e-4
+warmup_frac: 0.03
+max_steps: 2000
+grad_accum: 4
+n_tasks_per_batch: 4
+n_points_per_task: 4
+l2_reg_generated_w: 1.0e-3
+val_freq: 500
+max_grad_norm: 1.0
+freeze_backbone_lora_steps: 0
+init_from: null
+seed: 0

@@ -1,0 +1,7 @@
+# ReconConfig. See docs/03_training_validation.md §2, Stage C.
+lr: 5.0e-4
+max_steps: 2000
+warmup_frac: 0.03
+batch_size: 64
+val_freq: 100
+seed: 0

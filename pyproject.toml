@@ -1,0 +1,62 @@
+[project]
+name = "steerable-text-to-lora"
+version = "0.1.0"
+description = "Behavior-level Text-to-LoRA: steering model reasoning via instruction-conditioned adapter generation"
+readme = "README.md"
+requires-python = ">=3.12"
+
+# Lower bounds, not pins. See docs/01_env.md for the rationale: the model code uses
+# only public transformers APIs, so it does not need the exact-pin treatment that
+# text-to-lora required. uv.lock is committed for reproducibility.
+dependencies = [
+    "torch>=2.9",
+    "transformers>=5.0",
+    "peft>=0.18",
+    "accelerate>=1.11",
+    "datasets>=4.0",
+    "safetensors>=0.4",
+    "pyyaml>=6.0",
+    "numpy>=1.26",
+    "tqdm>=4.66",
+]
+
+[project.optional-dependencies]
+# Prebuilt flash-attn fetched from the Hub at load time -- no CUDA toolkit, no compiler.
+# Enables attn_implementation="kernels-community/flash-attn". Upper-bounded: transformers
+# gates this integration on kernels < 0.16.0 (see transformers.utils.import_utils's
+# KERNELS_MIN_VERSION/KERNELS_MAX_VERSION) -- an unbounded floor silently resolves to a
+# `kernels` release transformers refuses to use, so is_kernels_available() returns False and
+# attn_implementation="kernels-community/flash-attn" raises ImportError at model-load time.
+attn = ["kernels>=0.4,<0.16.0"]
+# Only needed if a generation-based evaluation is added later. Deliberately NOT a core
+# dependency: vllm is what forced every hard pin in the reference repo.
+gen = ["vllm>=0.11"]
+log = ["wandb>=0.18"]
+dev = ["pytest>=8.0", "ruff>=0.6"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/steerable_t2l"]
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu128" }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = ["ignore::DeprecationWarning"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["E501", "B008"]
