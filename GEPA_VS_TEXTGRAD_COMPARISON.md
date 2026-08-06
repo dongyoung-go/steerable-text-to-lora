@@ -98,6 +98,19 @@ A candidate, once accepted and given its one full val pass, is **never re-evalua
 again** — there is no dedup-by-content or cache-reuse step in `_add_evaluated_program` that would
 cause the same tree node to be scored twice.
 
+**Noise caveat, now fixed (`cache_evaluation=True`)**: GEPA's task-solving forward pass runs at
+`temperature=0.6` (see §8 below), so two *different* tree nodes can independently land on
+byte-identical instruction text (e.g. a reflection call that decides no edit is needed, returning
+the parent's own wording unchanged) and each still gets scored via a fresh stochastic draw. Since
+scores aren't deterministic, that identical text can spuriously look like a "strict improvement"
+over its own parent purely from sampling luck — observed directly in this repo's earlier
+`bbh_word_sorting` run, where a parent scoring 0/3 on its minibatch draw was "beaten" by an
+identical-text child that redrew 1/3 on the same 3 questions. `gepa_repro.py` now sets
+`cache_evaluation=True` on `EngineConfig`, matching the GEPA paper's own methodology (see §8):
+this makes `_evaluate_programs_on_valset` serve a repeated candidate's full-val score from cache
+instead of re-drawing it, which eliminates this specific noise-driven duplication going forward
+(it does not change the separate, purely mathematical 3/3-parent dead end described above).
+
 ## 6. Distinct prompt count, in practice
 
 - **TextGrad**: at most `max_epochs * steps_per_epoch + 1` prompts (13 by default: baseline +
@@ -122,6 +135,46 @@ cause the same tree node to be scored twice.
 | Termination | Fixed iteration count (12 default) | Rollout-budget exhaustion (3936 default) |
 | Distinct-prompt count | Predictable upper bound (≤13 default) | Budget- and acceptance-rate-dependent, not fixed |
 
+## 8. Fidelity to the original papers/repos
+
+Checked directly against the arXiv PDFs (2406.07496 for TextGrad, 2507.19457 for GEPA) and the
+vendored official repos (`textgrad_repro/`, `gepa_repro/`), not just their abstracts:
+
+- **Decoding temperature**: TextGrad's official `evaluation/prompt_optimization.py` (the actual
+  script behind the paper's GSM8K/BBH prompt-optimization results) never overrides any engine's
+  `temperature=0` default — greedy decoding is the paper-consistent setting, and
+  `textgrad_repro.py` matches it. GEPA's Appendix E.2 explicitly states: *"we use a decoding
+  temperature of 0.6, top-p of 0.95, and top-k of 20 for training as well as inference"* for
+  Qwen3-8B — an exact match to `gepa_repro_common.py`'s solver defaults.
+- **3/3 perfect-parent handling**: the GEPA paper has no discussion of this case, and
+  `skip_perfect_score=False` is the library default. Checked three of GEPA's own official example
+  scripts (`aime_math`, `anymaths-bench`, `terminal-bench`) — all leave it `False`, including two
+  that explicitly set `perfect_score=1`. This is a deliberate departure, not a fidelity gap,
+  though: `skip_perfect_score=True` doesn't change *what's reachable*, only what's wasted — with
+  per-example binary scores and `StrictImprovementAcceptance`, a parent whose minibatch draw is
+  already all-perfect can never be beaten (a child's score is bounded by the same max), so
+  proposing against it always burns a reflection-LM call and a child eval on something
+  mathematically guaranteed to be rejected. GEPA's own examples are hard enough tasks that an
+  all-perfect 3-example draw is rare, so the flag barely matters for them; this repo's tasks are
+  easier (binary correctness, capable 14B model), so a perfect draw is common enough to matter —
+  it's exactly what happened at `iter=93` in the traced `bbh_word_sorting` run. `gepa_repro.py`
+  now sets `skip_perfect_score=True` + `perfect_score=1.0` to eliminate that waste, since nothing
+  of value is given up by skipping a proposal that could never be accepted anyway.
+- **Evaluation caching**: the GEPA paper explicitly flags this as something they control for —
+  *"generation stochasticity (temperature based sampling) is eliminated by operating under a
+  cache; this ensures that observed improvements tie closely to ... prompt updates ... rather
+  than [sampling noise]."* Four of GEPA's own official examples (`aime_math`, `arc_agi`,
+  `blackbox`, `circle_packing`) set `cache_evaluation=True`. `gepa_repro.py` previously left this
+  at the library default (`False`), which is the direct cause of the noise-driven duplicate-val
+  phenomenon described in §5 and §9 below. **Now set to `True`**, matching the paper's own
+  methodology.
+
+With these fixes: solver decoding temperature and evaluation caching now match the original
+papers'/repos' own settings; perfect-parent handling deliberately diverges from GEPA's own
+examples (`skip_perfect_score=True` here vs. their `False`), because that's a pure efficiency
+call with no correctness tradeoff for this repo's easier, binary-scored tasks, not a fidelity
+requirement.
+
 ---
 
 ## v3 training-dataset construction (`build_tasks_from_*_repro_v3.py`)
@@ -139,11 +192,19 @@ into the training data for either method.
   `row["question"]` against `val_set.jsonl`'s question set to identify val rows, then groups by
   literal `candidate` text. Each group normally has **up to 100 rows**, one val pass per accepted
   candidate.
-- Edge case (rare, not a designed feature): if two independently-accepted GEPA tree nodes happen
-  to produce byte-identical instruction text (reflection at `temperature=0.7` converging twice on
-  the same wording), each node still gets its own separate ≤100-row val pass, and the v3 builder's
-  group-by-text logic merges them — so a GEPA instruction group can occasionally exceed 100 rows.
-  This is a coincidence of content collision, not re-evaluation of the same tree node.
+- **Known issue in data generated before the `cache_evaluation=True` fix (§8)**: if two
+  independently-accepted GEPA tree nodes land on byte-identical instruction text — commonly a
+  no-op reflection call that returns the parent's own wording unchanged, then spuriously clears
+  `StrictImprovementAcceptance` against its own parent purely from `temperature=0.6` resampling
+  noise (traced concretely in §5) — each node still gets its own separate ~100-row val pass, and
+  the v3 builder's group-by-text logic merges them into one oversized group. This was observed
+  empirically, not rare: e.g. one `bbh_word_sorting` instruction group had **700** rows (7
+  independently-accepted, text-identical nodes) in a run predating the cache fix. Any GEPA v3 data
+  built from a `data/gepa_repro/` run made before `cache_evaluation=True` was set should be treated
+  as carrying this distortion — group sizes for those runs are not a reliable proxy for "one val
+  pass per instruction," and some instruction groups may need re-generation from a fresh run to get
+  clean ≤100-row groups. Runs made after the fix should not exhibit this (the full-val pass for a
+  repeated candidate is now served from cache instead of re-drawn).
 - Both builders keep only `correct == True` rows by default (`--filter-correct`, since these rows
   double as SFT targets), drop any response still containing `<think>`, dedupe by
   `(question, response)` pair, and drop an instruction group entirely if fewer than

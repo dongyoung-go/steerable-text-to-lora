@@ -16,11 +16,11 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__)))
 from textgrad_repro import (
+    ANSWER_PARSERS,
+    TASKS,
     ChatVLLM,
     _patch_chat_vllm_engine,
     eval_split,
-    ANSWER_PARSERS,
-    TASKS,
     set_seed,
 )
 

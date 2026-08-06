@@ -502,6 +502,16 @@ TASKS["aime"] = dict(
     # capability failure rather than a budget problem.
     max_tokens=16000,
     min_max_model_len=32768,
+    # TextGrad-only (gepa_repro.py never reads this key -- it has its own
+    # separate --reflection_max_tokens for the analogous rewrite call).
+    # Matches max_tokens above rather than the --optimizer_max_tokens
+    # default of 8000: the optimizer.step() rewrite call concatenates the
+    # current prompt + 3 gradients (themselves generated at this task's
+    # bumped forward budget) and, with --enable_thinking's TextGrad-side
+    # default of True, needs headroom for a <think> block before reaching
+    # the closing tag -- see _OptimizerEngineProxy's docstring for the
+    # (simpler-task) incident this same failure mode already caused once.
+    optimizer_max_tokens=16000,
 )
 
 # New Dataset loaders (~15-25 lines each above, via the shared _RowsDataset
@@ -831,7 +841,8 @@ def main(args):
         ),
     )
     model = tg.BlackboxLLM(engine, system_prompt)
-    optimizer_engine = _OptimizerEngineProxy(engine, args.optimizer_max_tokens)
+    optimizer_max_tokens = spec.get("optimizer_max_tokens", args.optimizer_max_tokens)
+    optimizer_engine = _OptimizerEngineProxy(engine, optimizer_max_tokens)
     optimizer = tg.TextualGradientDescent(engine=optimizer_engine, parameters=[system_prompt])
     eval_fn = StringBasedFunction(_make_equality_fn(parse), function_purpose=spec["eval_purpose"])
 

@@ -32,7 +32,27 @@
 #     description-augmentation is built as its own feature.
 #   - phase 4c has no hardcoded task allowlist (v2's run_04b hardcoded 8 tasks) -- it defaults to
 #     every successful task dir from both namespaces, where "successful" already means "passed
-#     the builder's own --min-samples filter".
+#     the builder's own --min-samples filter". This applies to eval_downstream_accuracy.py (the
+#     small Q-holdout script), which scores every _dK instruction variant a task's optimization
+#     run ever tried.
+#   - eval_downstream_accuracy_full.py (the full-official-test-set script) instead scores only
+#     ONE task dir per original task/algorithm: the single winning instruction "TextGrad"/"GEPA"
+#     itself actually settled on, not every rejected/reverted _dK variant. Computed fresh each
+#     --full run by scripts/select_best_prompt_tasks_v3.py (fast, CPU-only): primarily matches
+#     each source dir's own best_prompt.json text verbatim against the task's instruction groups;
+#     falls back to ranking groups by their own recorded val score only when that literal winner
+#     didn't survive --min-samples or has no exact text match. Verified against the real data
+#     (2026-08-06): 52/57 (task, algorithm) pairs get a winner (25 textgrad + 27 gepa, each task
+#     appearing exactly once), 44 of those 52 via the literal best_prompt.json match and 8 via
+#     the score-ranked fallback (all gepa -- textgrad's official pick survived for every one of
+#     its 25 non-dropped tasks); 5 pairs (bbh_dyck_languages x2, bbh_word_sorting/gpqa_main
+#     textgrad-only, aime gepa-only) are dropped entirely -- no instruction group for them
+#     survived --min-samples at all. See select_best_prompt_tasks_v3.py's docstring and
+#     run_04c_downstream_eval_v3.sh's header for the full mechanics (including why gepa needs a
+#     candidate-text join instead of an iteration-index join against iterations.jsonl -- gepa's
+#     forward_outputs.jsonl "iteration" field is an unrelated global call counter, not the same
+#     index space as iterations.jsonl's own "iteration" field, unlike textgrad where the two
+#     files genuinely share one loop counter).
 #
 #   bash run_all_v3.sh                        # lint + tests only for both phases (CPU-safe)
 #   bash run_all_v3.sh --full                  # ... PLUS every real, long-running stage.

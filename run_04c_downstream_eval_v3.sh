@@ -1,10 +1,25 @@
 #!/usr/bin/env bash
 # Phase 4, v3 dataset: same eval as run_04b_downstream_eval_v2.sh, but pointed at the v3
-# hypernet checkpoint/splits/oracle dir produced by run_03c_training_validation_v3.sh --full, and
-# defaulting to ALL successful textgrad_repro_v3_* and gepa_repro_v3_* task dirs (unlike v2's
-# hardcoded 8-task allowlist) -- "successful" already means "survived the builders' own
-# --min-samples filter", so no further curation is needed here. See docs/03/docs/04 for what
-# v1/v2 were; v3 additionally pools reverted/repeated-prompt iterations (see run_all_v3.sh).
+# hypernet checkpoint/splits/oracle dir produced by run_03c_training_validation_v3.sh --full. See
+# docs/03/docs/04 for what v1/v2 were; v3 additionally pools reverted/repeated-prompt iterations
+# (see run_all_v3.sh) and trains one oracle LoRA per distinct instruction (task dirs suffixed
+# _d0, _d1, ... -- see the builders' docstrings).
+#
+# The two eval scripts intentionally differ in task scope:
+#   - eval_downstream_accuracy.py (small Q-holdout): defaults to ALL successful
+#     textgrad_repro_v3_*/gepa_repro_v3_* task dirs (unlike v2's hardcoded 8-task allowlist) --
+#     "successful" already means "survived the builders' own --min-samples filter", so no further
+#     curation is needed. This scores every instruction variant a task's optimization run ever
+#     tried, not just the winning one.
+#   - eval_downstream_accuracy_full.py (full official test sets): defaults to ONLY the single
+#     winning-instruction task dir per original task/algorithm -- "the output of TextGrad and
+#     GEPA" itself, not every rejected/reverted instruction a task's `_dK` variants also cover.
+#     Computed fresh each run by scripts/select_best_prompt_tasks_v3.py (fast, CPU-only, reads
+#     each source dir's own best_prompt.json + iterations.jsonl -- see that script's docstring
+#     for exactly how "winning" is resolved, including its fallback when the literal winning
+#     instruction's group didn't survive --min-samples). Since a single task list feeds every
+#     condition, this scope applies uniformly to base/prompted/oracle/t2l_train_desc/
+#     t2l_other_task_desc/t2l_gibberish_desc for this script, not just t2l_train_desc/prompted.
 #
 #   bash run_04c_downstream_eval_v3.sh            # lint + full pytest suite (same as
 #                                                   # run_04b_downstream_eval_v2.sh -- no
@@ -71,6 +86,22 @@ if [[ $FULL -eq 1 ]]; then
     else
         TRAIN_TASKS_ARR=(textgrad_repro_v3_* gepa_repro_v3_*)
     fi
+
+    # eval_downstream_accuracy_full.py gets its own, narrower task list: only the winning
+    # instruction per task/algorithm (see header comment). Recomputed fresh every run -- cheap,
+    # CPU-only, no GPU/network needed -- rather than cached, so it always reflects whatever task
+    # dirs currently exist under TASKS_ROOT.
+    if [[ -n "${FULL_EVAL_TRAIN_TASKS:-}" ]]; then
+        read -ra FULL_EVAL_TRAIN_TASKS_ARR <<< "$FULL_EVAL_TRAIN_TASKS"
+    else
+        BEST_PROMPT_TASKS_FILE="${BEST_PROMPT_TASKS_FILE:-data/best_prompt_tasks_v3.txt}"
+        echo "--- selecting winning-instruction task dirs for eval_downstream_accuracy_full.py"
+        uv run --no-sync python scripts/select_best_prompt_tasks_v3.py \
+            --textgrad-src-root data/textgrad_repro --gepa-src-root data/gepa_repro \
+            --tasks-out "$TASKS_ROOT" --out "$BEST_PROMPT_TASKS_FILE"
+        mapfile -t FULL_EVAL_TRAIN_TASKS_ARR < "$BEST_PROMPT_TASKS_FILE"
+    fi
+
     TARGET_DIR="${TARGET_DIR:-Qwen/Qwen2.5-1.5B-Instruct}"
     HYPERNET_CKPT="${HYPERNET_CKPT:-outputs/checkpoints/sft_warmstart_v3/latest.pt}"
     ORACLE_DIR="${ORACLE_DIR:-outputs/oracle_loras_v3}"
@@ -97,10 +128,10 @@ if [[ $FULL -eq 1 ]]; then
         "${FORCE_FLAG[@]}"
 
     echo
-    echo "--- downstream accuracy eval (v3, full official test sets, incl. oracle)"
+    echo "--- downstream accuracy eval (v3, full official test sets, winning instruction only, incl. oracle)"
     uv run --no-sync python scripts/eval_downstream_accuracy_full.py \
         --hypernet "$HYPERNET_CKPT" --target-dir "$TARGET_DIR" \
-        --tasks-root "$TASKS_ROOT" --train-tasks "${TRAIN_TASKS_ARR[@]}" --splits data/splits_v3.json \
+        --tasks-root "$TASKS_ROOT" --train-tasks "${FULL_EVAL_TRAIN_TASKS_ARR[@]}" --splits data/splits_v3.json \
         --oracle-dir "$ORACLE_DIR" --gen-batch-size "$GEN_BATCH_SIZE" --out "$OUT_FULL" \
         "${FORCE_FLAG[@]}"
 fi

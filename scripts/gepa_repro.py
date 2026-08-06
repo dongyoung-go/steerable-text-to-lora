@@ -269,10 +269,48 @@ def main(args):
             track_best_outputs=True,
             parallel=False,
             seed=args.seed,
+            # Matches the GEPA paper's own methodology (arXiv:2507.19457,
+            # Appendix E.2): "generation stochasticity (temperature based
+            # sampling) is eliminated by operating under a cache; this
+            # ensures that observed improvements tie closely to ... prompt
+            # updates ... rather than [sampling noise]." Several of GEPA's
+            # own official examples (aime_math, arc_agi, blackbox,
+            # circle_packing) set this too. Without it (the library default
+            # is False, and earlier runs of this script left it unset), a
+            # byte-identical candidate re-evaluated on the full val set gets
+            # a fresh stochastic (temperature=0.6) draw instead of the
+            # cached score, which let noise alone -- not any real
+            # instruction change -- repeatedly clear the minibatch
+            # acceptance bar and inflate/duplicate that candidate's
+            # full-val-pass count (observed empirically: one
+            # bbh_word_sorting candidate accrued 7 separate ~100-row val
+            # passes of literally the same text). See
+            # GEPA_VS_TEXTGRAD_COMPARISON.md.
+            cache_evaluation=True,
         ),
         reflection=ReflectionConfig(
             reflection_lm=reflection_lm,
             reflection_minibatch_size=args.batch_size,
+            # Per-example scores here are binary (0.0/1.0, see batch_evaluate
+            # below), so a parent whose minibatch draw is all-perfect can
+            # mathematically never be beaten under StrictImprovementAcceptance
+            # (a child's score is bounded by the same max) -- proposing
+            # against it always burns a reflection-LM call plus a wasted
+            # child eval for a proposal that's rejected regardless of what it
+            # says. skip_perfect_score=True (paired with perfect_score=1.0,
+            # required by the library when the flag is on) skips proposing
+            # for that one task instead; it does not resample a different
+            # minibatch for the same parent, it just moves on to the next
+            # iteration's normal (parent, minibatch) draw. GEPA's own
+            # official examples (aime_math, anymaths-bench, terminal-bench)
+            # leave this False, but their tasks are hard enough that an
+            # all-perfect 3-example draw is rare; this repo's tasks are
+            # easier (binary correctness, capable model), so a perfect draw
+            # is common enough to matter -- confirmed happening in the
+            # bbh_word_sorting run this script's cache_evaluation fix above
+            # was diagnosed from. See GEPA_VS_TEXTGRAD_COMPARISON.md.
+            skip_perfect_score=True,
+            perfect_score=1.0,
         ),
         # `stop_callbacks` lives on GEPAConfig itself, not EngineConfig --
         # confirmed against gepa_repro/src/gepa/gepa_launcher.py (EngineConfig

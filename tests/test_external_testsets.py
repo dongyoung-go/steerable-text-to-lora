@@ -21,6 +21,13 @@ def test_bbh_subtask_name_strips_task_prefix():
     assert _bbh_subtask_name("bbh_dyck_languages") == "dyck_languages"
 
 
+def test_bbh_subtask_name_strips_v3_instruction_suffix():
+    # build_tasks_from_{textgrad,gepa}_repro_v3.py name per-instruction task dirs
+    # "..._bbh_<subtask>_d<K>" -- the "_d<K>" tail must not leak into the BBH URL slug.
+    assert _bbh_subtask_name("textgrad_repro_v3_bbh_causal_judgement_d0") == "causal_judgement"
+    assert _bbh_subtask_name("gepa_repro_v3_bbh_word_sorting_d12") == "word_sorting"
+
+
 def test_bbh_subtask_name_rejects_non_bbh_task():
     with pytest.raises(ValueError):
         _bbh_subtask_name("textgrad_repro_v2_aqua")
@@ -54,4 +61,24 @@ def test_load_external_test_rows_dispatches_other_domain_by_task_name_suffix(mon
     rows = load_external_test_rows("other", "textgrad_repro_v2_trec")
 
     assert called == ["textgrad_repro_v2_trec"]
+    assert rows[0]["gold_answer"] == "LOC"
+
+
+def test_load_external_test_rows_dispatches_other_domain_with_v3_instruction_suffix(monkeypatch):
+    # Same as above, but with a v3-style "..._d<K>" task dir name -- the suffix match must
+    # strip it before comparing, not require an exact "_trec" tail.
+    import steerable_t2l.data.external_testsets as ext
+
+    called = []
+
+    def fake_loader(task_name):
+        called.append(task_name)
+        return [{"question": "q", "response": "", "gold_answer": "LOC"}]
+
+    monkeypatch.setitem(ext._OTHER_DOMAIN_LOADERS, "trec", fake_loader)
+
+    rows = load_external_test_rows("other", "textgrad_repro_v3_trec_d3")
+
+    # the loader still receives the full, un-stripped task name (needed downstream elsewhere)
+    assert called == ["textgrad_repro_v3_trec_d3"]
     assert rows[0]["gold_answer"] == "LOC"
