@@ -13,3 +13,6 @@ textgrad_repro/
 gepa_repro/
 data/
 *.log
+
+.env
+!.env.example

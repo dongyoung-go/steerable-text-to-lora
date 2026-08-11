@@ -1,0 +1,13 @@
+# Arm (5) Trajectory, ON/ON (Ours) -- README section 4: same momentum-conditioning as arm (4),
+# plus internalization + calibration (arm (3)'s machinery, reused unchanged, applied to momentum
+# context instead of critique context). This is the arm the paper's central claim rests on:
+# success criteria are (5) > (4) and (5) > (3), README section 4.
+custom:
+  reward_data_source: math
+  custom_reward_function:
+    path: tmgrpo/verl_hooks.py
+    name: compute_score
+  conditioning: momentum
+  internalization: true       # same NOT-YET-IMPLEMENTED caveat as arm 3 -- see tmgrpo/verl_hooks.py
+  calibration: true
+  calibration_w_max: 5.0

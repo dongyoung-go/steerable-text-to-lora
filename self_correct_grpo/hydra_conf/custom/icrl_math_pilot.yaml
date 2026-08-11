@@ -1,0 +1,30 @@
+# Phase 1 pilot custom config (self_correct_grpo_README.md §1.1, §6.1).
+#
+# Cloned from vendor/ICRL/icrl/hydra_conf/custom/icrl.yaml with env_name switched to "math" and
+# max_rounds kept at 2 (one executor attempt -> one critique -> one revised attempt, matching the
+# "flat 2-stage rollout" ICRL baseline row in the README's §6.2 table). `env_nums`/`env_port_base`
+# are unused for the math env (MathEnvClient is constructed in-process per sample, no server) but
+# `icrl/generate.py` reads them unconditionally at the top of `generate()`, so harmless
+# placeholder values are kept to avoid a KeyError.
+#
+# `ungated` is read only by `self_correct_grpo/icrl_ungated/generate.py` (vendored `icrl/generate.py`
+# ignores unknown custom_config keys). Select the arm via which hydra_runner module you invoke
+# (see ../../run_pilot_gated.sh / run_pilot_ungated.sh), not by flipping this flag alone — the
+# gated run must use vendored `icrl.hydra_runner` (which always calls `icrl.generate.generate`)
+# to be a faithful, untouched reproduction of upstream.
+name: icrl_math_pilot
+env_name: math
+reward_process: icrl.rewards2.post_process_rewards
+custom_config:
+  generate: icrl
+  reward_norm: role_norm
+  max_rounds: 2
+  max_env_turns: 4
+  max_repeat_actions: 3
+  verifier_max_new_tokens: 1024
+  critic_max_new_tokens: 1024
+  mask_reward_threshold: 0.3
+  env_port_base: 36001
+  env_nums: 1
+  ungated: false
+  exp_dir: ${paths.exp_dir}

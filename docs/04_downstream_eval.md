@@ -596,3 +596,78 @@ for all 8 trained tasks. Wired in and run:
   writeup above for the per-task breakdown and why the two comparison methods disagree
   (`dyck_languages`' 2.0x ratio, from a genuine-but-small absolute 10-vs-5-correct gap on n=100,
   single-handedly moves the ratio average from ~0.95 to 1.10).
+
+---
+
+## 14. v3 dataset run (2026-08-11) — recon warm-start collapses; from-scratch SFT is now the arm that steers
+
+> ⚠️ **This reverses §12 point 4 / docs/03's v1-v2 conclusion.** Those were built on v1/v2 data,
+> where recon warm-start was clearly the working arm (steering margin 6-50x larger than
+> from-scratch). On v3 data (`docs/03`'s new "v3 dataset run" section has the full loss-side
+> diagnosis: recon flatlines at a mean-baseline fit for its entire 2000-step run), recon
+> warm-start collapses to a near-description-independent LoRA instead, and **from-scratch SFT is
+> now the arm that shows real, growing steering signal**. `run_04c_downstream_eval_v3.sh` still
+> defaults `HYPERNET_CKPT` to `sft_warmstart_v3` — until the recon stage is fixed (more genuine
+> task diversity + per-task description-paraphrase augmentation, see docs/03), **trust
+> `sft_scratch_v3`, not `sft_warmstart_v3`**.
+
+Same eval scripts, same 45-task winning-instruction scope (`data/best_prompt_tasks_v3.txt`, 38
+after excluding T-holdout tasks — see `run_04c_downstream_eval_v3.sh`'s header), run twice: once
+against `outputs/checkpoints/sft_warmstart_v3/latest.pt` (the default) and once against
+`outputs/checkpoints/sft_scratch_v3/latest.pt`, via:
+
+```bash
+HYPERNET_CKPT=outputs/checkpoints/sft_scratch_v3/latest.pt \
+OUT=outputs/eval/downstream_accuracy_scratch_v3.json \
+OUT_FULL=outputs/eval/downstream_accuracy_full_scratch_v3.json \
+bash run_04c_downstream_eval_v3.sh --full
+```
+
+### Result
+
+| condition | small-holdout / warmstart | small-holdout / scratch | full-test-set / warmstart | full-test-set / scratch |
+|---|---|---|---|---|
+| `base` | 0.328 | 0.328 | 0.309 | 0.309 |
+| `prompted` | 0.440 | 0.440 | 0.416 | 0.416 |
+| `oracle` | 0.593 | 0.593 | 0.579 | 0.579 |
+| `t2l_train_desc` | 0.471 | **0.543** | 0.387 | **0.484** |
+| `t2l_other_task_desc` | 0.465 | 0.435 | 0.386 | 0.414 |
+| `t2l_gibberish_desc` | 0.454 | 0.458 | 0.400 | 0.389 |
+
+(`base`/`prompted`/`oracle` are identical warm vs. scratch as expected — those three conditions
+never touch the hypernet checkpoint at all; a useful sanity check that only the `t2l_*`
+conditions, the ones that actually depend on the checkpoint, differ.)
+
+| comparison (macro) | small/warmstart | small/scratch | full/warmstart | full/scratch |
+|---|---|---|---|---|
+| `t2l_train_desc − prompted` | +0.031 | **+0.103** | −0.029 | **+0.068** |
+| `t2l_train_desc − t2l_other_task_desc` | +0.006 | **+0.108** | +0.001 | **+0.070** |
+| `t2l_train_desc − t2l_gibberish_desc` | +0.017 | **+0.085** | −0.013 | **+0.095** |
+| `t2l_train_desc / oracle` | 0.89x | 1.07x | 0.69x | 0.91x |
+
+Warmstart is essentially flat across all three discrimination deltas (0.001-0.031, and *negative*
+on two of them on the full test set) — no real separation between the correct description, a
+wrong task's description, or gibberish. Scratch shows a consistent +0.07 to +0.11 gap on every
+comparison, in both eval scopes — the same pattern the loss-side `steering_margin` predicted
+(docs/03's new v3 section), now confirmed against real held-out generation accuracy rather than
+an internal training metric.
+
+### Takeaways
+
+- **Recon warm-start is actively harmful on v3 data, not merely unhelpful.** It leaves the
+  hypernetwork in a state 2000 SFT steps can't escape, suppressing steering behavior the same
+  architecture clearly can learn from scratch.
+- **From-scratch SFT works, modestly.** `t2l_train_desc` beats `prompted` by a real, positive
+  margin in both eval scopes now, and recovers 91-107% of the gap to `oracle` — a coherent result,
+  unlike warmstart's near-random pattern.
+- **Still real headroom.** Even scratch's `t2l_train_desc` (0.543/0.484) is competitive with, not
+  clearly ahead of, `oracle` (0.593/0.579), and the correct-vs-wrong-description gap (+0.07-0.11)
+  is real but modest — consistent with docs/03's diagnosis that 27 genuinely distinct tasks with
+  zero within-task paraphrase diversity is still a much thinner training signal than reference
+  T2L's ~479 tasks × 128 paraphrases (docs/03's v3 section has the full comparison). From-scratch
+  SFT partially routes around the broken recon stage; the underlying data-scale gap has not gone
+  away.
+- **Practical recommendation**: report/trust `sft_scratch_v3` for v3 results until recon is
+  fixed. Consider changing `run_04c_downstream_eval_v3.sh`'s `HYPERNET_CKPT` default, or fixing
+  recon's data starvation (more real task diversity + per-task description-paraphrase
+  augmentation, more training budget), before relying on `sft_warmstart_v3` again.

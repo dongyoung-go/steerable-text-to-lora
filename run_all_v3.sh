@@ -30,15 +30,18 @@
 #     holdout) eval split is universally N/A for v3 -- same degenerate case the codebase already
 #     warns about for legacy single-description tasks. Accepted tradeoff until
 #     description-augmentation is built as its own feature.
-#   - phase 4c has no hardcoded task allowlist (v2's run_04b hardcoded 8 tasks) -- it defaults to
-#     every successful task dir from both namespaces, where "successful" already means "passed
-#     the builder's own --min-samples filter". This applies to eval_downstream_accuracy.py (the
-#     small Q-holdout script), which scores every _dK instruction variant a task's optimization
-#     run ever tried.
-#   - eval_downstream_accuracy_full.py (the full-official-test-set script) instead scores only
-#     ONE task dir per original task/algorithm: the single winning instruction "TextGrad"/"GEPA"
-#     itself actually settled on, not every rejected/reverted _dK variant. Computed fresh each
-#     --full run by scripts/select_best_prompt_tasks_v3.py (fast, CPU-only): primarily matches
+#   - phase 4c has no hardcoded task allowlist (v2's run_04b hardcoded 8 tasks). Both
+#     eval_downstream_accuracy.py (small Q-holdout) and eval_downstream_accuracy_full.py (full
+#     official test sets) now default to the SAME scope: only ONE task dir per original
+#     task/algorithm, the single winning instruction "TextGrad"/"GEPA" itself actually settled
+#     on, not every rejected/reverted _dK variant a task's optimization run also tried. (Earlier,
+#     eval_downstream_accuracy.py instead defaulted to every successful _dK task dir from both
+#     namespaces -- "successful" meaning "passed the builder's own --min-samples filter" -- i.e.
+#     all ~576 instruction variants; that's still available via
+#     TRAIN_TASKS="textgrad_repro_v3_* gepa_repro_v3_*" in run_04c_downstream_eval_v3.sh, it's
+#     just no longer the default, since it adds a ~10x task-count multiplier on top of
+#     already-expensive per-condition generation.) Computed fresh each --full run by
+#     scripts/select_best_prompt_tasks_v3.py (fast, CPU-only): primarily matches
 #     each source dir's own best_prompt.json text verbatim against the task's instruction groups;
 #     falls back to ranking groups by their own recorded val score only when that literal winner
 #     didn't survive --min-samples or has no exact text match. Verified against the real data

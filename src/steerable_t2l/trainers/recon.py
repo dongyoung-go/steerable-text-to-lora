@@ -75,26 +75,28 @@ def build_recon_batches(
     by whatever ``tasks`` contains rather than a fixed-size table, so it scales unchanged as
     more tasks/domains are added later.
 
-    ``device`` must match the hypernet's device: ``load_and_canonicalize_oracle`` otherwise
-    defaults to CPU regardless of where the hypernet (and therefore its predicted A/B) live,
-    which only happens to work when both sides are CPU.
+    The cache is kept on CPU regardless of ``device`` -- v3's "one task dir per instruction"
+    architecture can put hundreds of tasks in ``tasks`` (vs. v2's few dozen), and holding every
+    task's oracle A/B on GPU simultaneously is enough by itself to OOM a step before it even
+    runs (observed: 434 tasks left ~176GB resident before the first ``hypernet.encode`` call).
+    Only the ``batch_size``-sized draw actually used by a given step is moved to ``device``.
 
     Yields ``{"descs": list[str], "target_A": {module: [bs, n_layers, r, in]},
-    "target_B": {module: [bs, n_layers, out, r]}}``.
+    "target_B": {module: [bs, n_layers, out, r]}}`` already on ``device``.
     """
     oracle_cache = {
-        task.name: load_and_canonicalize_oracle(str(Path(oracle_dir) / task.name), spec, device=device)
+        task.name: load_and_canonicalize_oracle(str(Path(oracle_dir) / task.name), spec, device="cpu")
         for task in tasks
     }
     while True:
         chosen_tasks = [rng.choice(tasks) for _ in range(batch_size)]
         descs = [rng.choice(task.metadata.descriptions) for task in chosen_tasks]
         target_A = {
-            m: torch.stack([oracle_cache[task.name][m][0] for task in chosen_tasks])
+            m: torch.stack([oracle_cache[task.name][m][0] for task in chosen_tasks]).to(device)
             for m in spec.target_modules
         }
         target_B = {
-            m: torch.stack([oracle_cache[task.name][m][1] for task in chosen_tasks])
+            m: torch.stack([oracle_cache[task.name][m][1] for task in chosen_tasks]).to(device)
             for m in spec.target_modules
         }
         yield {"descs": descs, "target_A": target_A, "target_B": target_B}

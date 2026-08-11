@@ -1,0 +1,38 @@
+# Single-B200-GPU colocated config for the Phase 1 pilot.
+#
+# Cloned from vendor/ICRL/icrl/hydra_conf/gpu/train_2gpu.yaml with every parallelism degree
+# collapsed to 1 (actor+rollout share the single card via --colocate; no tensor/pipeline/context
+# parallelism to configure since there's only one device to split across).
+resources_cli:
+  actor_num_nodes: 1
+  actor_num_gpus_per_node: 1
+  colocate: true
+
+perf_cli:
+  tensor_model_parallel_size: 1
+  sequence_parallel: false
+  pipeline_model_parallel_size: 1
+  context_parallel_size: 1
+  expert_model_parallel_size: 1
+  expert_tensor_parallel_size: 1
+  recompute_granularity: full
+  recompute_method: uniform
+  recompute_num_layers: 1
+  use_dynamic_batch_size: true
+  max_tokens_per_gpu: 16384
+
+ray_start:
+  head: true
+  node_ip_address: ${oc.env:MASTER_ADDR,127.0.0.1}
+  num_gpus: 1
+  disable_usage_stats: true
+  dashboard_host: 0.0.0.0
+  dashboard_port: 8265
+
+ray_job:
+  address: http://127.0.0.1:8265
+  runtime_env:
+    env_vars:
+      PYTHONPATH: /root/Megatron-LM/
+      CUDA_DEVICE_MAX_CONNECTIONS: "1"
+      NCCL_NVLS_ENABLE: "0"

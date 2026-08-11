@@ -5,21 +5,21 @@
 # (see run_all_v3.sh) and trains one oracle LoRA per distinct instruction (task dirs suffixed
 # _d0, _d1, ... -- see the builders' docstrings).
 #
-# The two eval scripts intentionally differ in task scope:
-#   - eval_downstream_accuracy.py (small Q-holdout): defaults to ALL successful
-#     textgrad_repro_v3_*/gepa_repro_v3_* task dirs (unlike v2's hardcoded 8-task allowlist) --
-#     "successful" already means "survived the builders' own --min-samples filter", so no further
-#     curation is needed. This scores every instruction variant a task's optimization run ever
-#     tried, not just the winning one.
-#   - eval_downstream_accuracy_full.py (full official test sets): defaults to ONLY the single
-#     winning-instruction task dir per original task/algorithm -- "the output of TextGrad and
-#     GEPA" itself, not every rejected/reverted instruction a task's `_dK` variants also cover.
-#     Computed fresh each run by scripts/select_best_prompt_tasks_v3.py (fast, CPU-only, reads
-#     each source dir's own best_prompt.json + iterations.jsonl -- see that script's docstring
-#     for exactly how "winning" is resolved, including its fallback when the literal winning
-#     instruction's group didn't survive --min-samples). Since a single task list feeds every
-#     condition, this scope applies uniformly to base/prompted/oracle/t2l_train_desc/
-#     t2l_other_task_desc/t2l_gibberish_desc for this script, not just t2l_train_desc/prompted.
+# Both eval scripts default to the SAME task scope: only the single winning-instruction task dir
+# per original task/algorithm -- "the output of TextGrad and GEPA" itself, not every
+# rejected/reverted `_dK` variant a task's optimization run also tried. Computed fresh each run
+# by scripts/select_best_prompt_tasks_v3.py into data/best_prompt_tasks_v3.txt (fast, CPU-only,
+# reads each source dir's own best_prompt.json + iterations.jsonl -- see that script's docstring
+# for exactly how "winning" is resolved, including its fallback when the literal winning
+# instruction's group didn't survive --min-samples). Since a single task list feeds every
+# condition, this scope applies uniformly to base/prompted/oracle/t2l_train_desc/
+# t2l_other_task_desc/t2l_gibberish_desc for both scripts.
+#
+# eval_downstream_accuracy.py's earlier default was every successful
+# textgrad_repro_v3_*/gepa_repro_v3_* task dir (unlike v2's hardcoded 8-task allowlist) -- honest
+# full-variant coverage, but ~576 task dirs is a ~10x multiplier on top of already-expensive
+# per-condition generation (up to max-new-tokens per row). Set TRAIN_TASKS="textgrad_repro_v3_*
+# gepa_repro_v3_*" below to get that back for this script specifically.
 #
 #   bash run_04c_downstream_eval_v3.sh            # lint + full pytest suite (same as
 #                                                   # run_04b_downstream_eval_v2.sh -- no
@@ -76,29 +76,31 @@ if [[ $FULL -eq 1 ]]; then
     echo "=== REAL run on B200 -- long-running, run manually and monitor ==="
 
     TASKS_ROOT="${TASKS_ROOT:-/home/dg793/text-to-lora/tasks}"
-    # Default is ALL successful v3 tasks from both algorithms -- unlike v2's hardcoded 8-task
-    # allowlist, there's no curated subset here: any task dir the builders wrote already passed
-    # --min-samples, so a glob over both namespaces is exactly "every successful dataset". Set
-    # TRAIN_TASKS to a space-separated list of patterns (glob or literal) to override, e.g. to
-    # restrict to one algorithm only.
-    if [[ -n "${TRAIN_TASKS:-}" ]]; then
-        read -ra TRAIN_TASKS_ARR <<< "$TRAIN_TASKS"
-    else
-        TRAIN_TASKS_ARR=(textgrad_repro_v3_* gepa_repro_v3_*)
-    fi
+    BEST_PROMPT_TASKS_FILE="${BEST_PROMPT_TASKS_FILE:-data/best_prompt_tasks_v3.txt}"
 
-    # eval_downstream_accuracy_full.py gets its own, narrower task list: only the winning
-    # instruction per task/algorithm (see header comment). Recomputed fresh every run -- cheap,
-    # CPU-only, no GPU/network needed -- rather than cached, so it always reflects whatever task
-    # dirs currently exist under TASKS_ROOT.
-    if [[ -n "${FULL_EVAL_TRAIN_TASKS:-}" ]]; then
-        read -ra FULL_EVAL_TRAIN_TASKS_ARR <<< "$FULL_EVAL_TRAIN_TASKS"
-    else
-        BEST_PROMPT_TASKS_FILE="${BEST_PROMPT_TASKS_FILE:-data/best_prompt_tasks_v3.txt}"
-        echo "--- selecting winning-instruction task dirs for eval_downstream_accuracy_full.py"
+    # Both TRAIN_TASKS_ARR and FULL_EVAL_TRAIN_TASKS_ARR default to the same winning-instruction
+    # list (see header comment) -- computed once here, fresh every run (cheap, CPU-only, no
+    # GPU/network needed), unless both TRAIN_TASKS and FULL_EVAL_TRAIN_TASKS are already set, in
+    # which case neither script needs it.
+    if [[ -z "${TRAIN_TASKS:-}" || -z "${FULL_EVAL_TRAIN_TASKS:-}" ]]; then
+        echo "--- selecting winning-instruction task dirs (default scope for both eval scripts)"
         uv run --no-sync python scripts/select_best_prompt_tasks_v3.py \
             --textgrad-src-root data/textgrad_repro --gepa-src-root data/gepa_repro \
             --tasks-out "$TASKS_ROOT" --out "$BEST_PROMPT_TASKS_FILE"
+    fi
+
+    # Set TRAIN_TASKS to a space-separated list of patterns (glob or literal) to override, e.g.
+    # TRAIN_TASKS="textgrad_repro_v3_* gepa_repro_v3_*" for every instruction variant (the old
+    # default) instead of just the winner.
+    if [[ -n "${TRAIN_TASKS:-}" ]]; then
+        read -ra TRAIN_TASKS_ARR <<< "$TRAIN_TASKS"
+    else
+        mapfile -t TRAIN_TASKS_ARR < "$BEST_PROMPT_TASKS_FILE"
+    fi
+
+    if [[ -n "${FULL_EVAL_TRAIN_TASKS:-}" ]]; then
+        read -ra FULL_EVAL_TRAIN_TASKS_ARR <<< "$FULL_EVAL_TRAIN_TASKS"
+    else
         mapfile -t FULL_EVAL_TRAIN_TASKS_ARR < "$BEST_PROMPT_TASKS_FILE"
     fi
 

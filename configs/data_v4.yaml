@@ -1,0 +1,22 @@
+# DataConfig -- v4 experiment. Same schema as configs/data_v3.yaml, but pointed at the
+# comprehensive_feedback_v4 tasks (scripts/build_tasks_from_comprehensive_feedback_v4.py) instead
+# of the prompt-text-based textgrad_repro_v3/gepa_repro_v3 tasks. Those task dirs carry a
+# generalized comprehensive-feedback string as their sole description (in place of the literal
+# optimized prompt) but otherwise have the identical shape (one task dir per distinct
+# description, deduped by (question, response) pair) -- see that builder's and
+# generate_comprehensive_feedback_v4.py's docstrings, and docs/05_comprehensive_feedback_v4.md,
+# for the full rationale. Fully separate cache_root from v3's so tokenization caches never mix.
+tasks_root: /home/dg793/text-to-lora/tasks
+train_tasks: [comprehensive_feedback_v4_*]
+
+# Inherited from configs/data_v3.yaml's profiled value -- not yet re-profiled against v4's actual
+# description lengths (comprehensive-feedback paragraphs are capped at ~150 words by
+# generate_comprehensive_feedback_v4.py's --max_words, likely shorter than the longest optimized
+# prompts v3 profiled against, but re-profile by hand with scripts/profile_lengths.py against the
+# built v4 task dirs before the first real --full run rather than assuming).
+inp_max_len: 2560
+
+n_tasks_per_batch: 4
+n_points_per_task: 4
+val_batch_size: 32
+cache_root: data/.cache_v4

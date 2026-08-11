@@ -329,9 +329,15 @@ def score_condition(
     # without that field fall back to the external HF gsm8k join (full CoT solutions ending in
     # "#### N") and always use the integer parser, matching this function's prior behavior
     # exactly -- classify_answer_parser must never see that shape (see its docstring).
+    # str(...): bbh_boolean_expressions' embedded gold_answer is a genuine JSON/Python bool,
+    # not a string like every other task's ("Yes"/"No", "C", "2200", ...) -- an upstream quirk
+    # of how the textgrad library's BigBenchHard("boolean_expressions", ...) dataset parses
+    # that task's target (confirmed on disk: forward_outputs.jsonl stores literal `true`/`false`
+    # for it and only it). str(True)/str(False) -> "True"/"False", the exact string form the
+    # task's own value_desc ("is True or False") already expects.
     has_embedded_gold = all("gold_answer" in row for row in rows)
     if has_embedded_gold:
-        gold_strs = [row["gold_answer"] for row in rows]
+        gold_strs = [str(row["gold_answer"]) for row in rows]
         parser_name = classify_answer_parser(gold_strs)
     else:
         gold_strs = [gold_answer(gold_index, row["question"]) for row in rows]

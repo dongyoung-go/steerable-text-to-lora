@@ -338,6 +338,18 @@ class SteerableHyperLoRA(nn.Module):
             self._apply_zero_init(seed=seed)
 
         self.to(device)
+        # AutoModel.from_pretrained loads the backbone in eval() mode; nn.Module assigns a
+        # freshly-constructed submodule's own .training as-is rather than syncing it to the
+        # parent's, so self.backbone silently stayed in eval() even though self.training was
+        # already True. HF's GradientCheckpointingLayer no-ops when self.training is False (see
+        # trainers/sft.py's identical target.train() gotcha for the target model), so every
+        # trainer that never explicitly called hypernet.train() got the backbone's full,
+        # unchecked 36-layer autograd graph on every encode() call instead of the intended
+        # one-layer-at-a-time recompute -- silently, since nothing errors, it just costs ~8x the
+        # memory a checkpointed forward should (repro: bs=8 forward-only peak was the same
+        # 21.8GB with gradient_checkpointing True or False). Eval-only callers already call
+        # hypernet.eval() explicitly afterwards, so defaulting to train() here is safe.
+        self.train()
 
     # -- construction helpers -------------------------------------------------------
 

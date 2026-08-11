@@ -208,6 +208,98 @@ pipeline, pointed at `outputs/checkpoints/sft_warmstart_v2`, `data/splits_v2.jso
 
 ---
 
+## v3 dataset run (2026-08-07 to 2026-08-11) — LoRA-per-description architecture; **reverses the v1/v2 "warmstart beats scratch" conclusion**
+
+> ⚠️ **This section contradicts v1's and v2's headline finding above.** In v1/v2, recon
+> warm-start was clearly the arm that worked (steering margin 6-50x larger than from-scratch) and
+> §5 step 3 / docs/04 §12 point 4 leaned on that result to argue the recon stage is load-bearing.
+> On the v3 data, recon warm-start collapses instead, and **from-scratch SFT is now the arm that
+> shows real steering** — see docs/04 §14 for the same reversal confirmed at the downstream
+> accuracy level, not just this section's loss-based metric. Do not assume `sft_warmstart_v3` is
+> the checkpoint to trust just because that pattern held in v1/v2.
+
+**What changed in v3**: `scripts/build_tasks_from_{textgrad,gepa}_repro_v3.py` build one task
+dir / one oracle LoRA per *distinct instruction* seen in a task's optimization trajectory
+(`<algo>_repro_v3_<task>_d<K>`), not one task dir per task name with a single winning instruction
+(v2's scheme). This gives 576 total v3 task dirs across both algorithms — but stripping the
+`_d<K>` suffix leaves only **27 genuinely distinct underlying task domains** (`gsm8k`, `aqua`,
+18x `bbh_*`, `commonsenseqa`, `gpqa_main`, `mmlu_all`, `multiarith`, `strategyqa`, `trec`); the
+other ~549 dirs are near-duplicate prompt-optimization iterations of those same 27 tasks, each
+carrying exactly one description (zero within-task paraphrase augmentation — the D-axis stays
+universally n/a for v3, same degenerate case already noted for legacy single-description tasks).
+Oracle adapters are trained on as few as 50 rows each (`--min-samples 50`).
+
+### Real-run result: recon never learns, even on its own training data
+
+`outputs/checkpoints/recon_v3/latest.pt`'s full logged history (2000 steps, `configs/recon.yaml`):
+
+| step | train_loss | cosine_similarity (pred ΔW vs. oracle ΔW) | normalized_l1_model | normalized_l1_mean_baseline |
+|---|---|---|---|---|
+| 100 | 1.068 | 0.0001 | 0.0003 | 0.0003 |
+| 600 | 0.989 | 0.025 (best point, transient) | 0.0003 | 0.0003 |
+| 700 | 1.644 | 0.000 (collapses back) | 0.0005 | 0.0003 |
+| 2000 | 1.000 | 0.0002 | 0.0003 | 0.0003 |
+
+`normalized_l1_model` equals `normalized_l1_mean_baseline` at **every** logged step — the model
+never beats "predict the per-module mean of the oracle targets" on its own training regression
+targets. This is a fit failure, not a generalization gap.
+
+**Tensor-level diagnosis** (comparing `recon_v3`'s saved `heads.*` weights to their zero-init
+starting point, see `hypernet.py::SteerableHyperLoRA._apply_zero_init`'s own docstring for the
+"fatal... shows up only as a flat loss curve" hazard this class already names): `out_A.weight`/
+`out_B.weight` (the pathways that let the *input* affect the output) moved substantially away
+from zero (norm ≈1.4-2.9) — so this is not the literal "B pinned at exactly zero" dead-gradient
+case. But `bottleneck.weight` (the layer receiving the actual description-conditioned query
+representation) is still at ≈99% of its random-init norm (10.12 measured vs. ≈10.24 expected at
+init) after the full run, while the **bias** terms of `out_A`/`out_B` (description-*independent*
+constants) moved the most (norm 0.33-0.85). Signature of the model shifting its output toward the
+population mean via the bias pathway while the input-dependent weight pathway stayed essentially
+unlearned.
+
+### SFT ablation: scratch learns real steering; warmstart is pinned at exactly zero
+
+`steering_margin` trend read directly from `outputs/checkpoints/{sft_scratch,sft_warmstart}_v3/latest.pt`'s
+logged history (`configs/sft.yaml`, 2000 steps, `val_freq=500`; entries = vs_gibberish/vs_other_task):
+
+| step | sft_scratch_v3 | sft_warmstart_v3 |
+|---|---|---|
+| 500 | +0.088 / +0.100 | −0.000 / +0.000 |
+| 1000 | +0.116 / +0.148 | +0.000 / −0.000 |
+| 1500 | +0.164 / +0.195 | +0.000 / +0.000 |
+| 2000 | **+0.205 / +0.226** | **+0.000 / −0.000** |
+
+Scratch steadily *learns* to depend on the description across all four checkpoints. Warmstart is
+pinned at noise-level (0.0000-0.0001) the entire run — warm-starting from the collapsed recon
+checkpoint poisons SFT badly enough that 2000 steps of a real downstream CE loss (which *does*
+teach steering from a from-scratch init, per the scratch column) never recovers it.
+
+### Why: dataset scale, not an unworkable design
+
+Compared against the reference T2L (`/home/dg793/text-to-lora/README.md`):
+
+| | reference T2L (Sakana) | v3 (this repo) |
+|---|---|---|
+| distinct task domains | ~479 (`--n_train_ds=479`) | 27 |
+| description paraphrases / task | 128 (`--n_descs_per_ds=128`) | 1 |
+| total (desc, target) pairs for recon | ~61,000 | 576 |
+| recon training budget | up to 10,000 epochs (~5 days/H100) | 2,000 steps (~a few hours) |
+| conditioning encoder | frozen small sentence-embedding model (`gte-large-en-v1.5`) + linear head | full 3B causal LLM (Qwen2.5-3B) + trainable LoRA + refiner + shared decoder (158M trainable params) |
+
+v3's task-dir count (576) looks superficially close to reference's task count (479), but it is
+~3 orders of magnitude short on genuine (task × paraphrase) diversity — the 576 v3 dirs are 27
+real tasks × ~21 near-duplicate wording iterations apiece, not 479 genuinely different domains ×
+128 deliberately-varied paraphrases. Reference's paraphrase augmentation is specifically what
+forces phrasing-invariant, content-sensitive conditioning to be learned at all; v3 has none. The
+architecture also swaps reference's cheap frozen-embedding + linear head for a much
+higher-capacity, harder-to-fit encoder, which needs *more* data/steps to reliably learn real
+conditioning, not less — compounding the scarcity rather than compensating for it. The
+architecture itself is not unworkable: the from-scratch SFT arm, using the identical zero-init
+mechanism and identical downstream loss, does learn real (if still modest) steering with this
+exact codebase — see docs/04 §14 for the confirmation at the downstream-accuracy level and the
+current recommendation to trust `sft_scratch_v3` over `sft_warmstart_v3`.
+
+---
+
 ## 1. Data pipeline — domain-general from day one
 
 ### Format (fixed — this is what the user supplies)
@@ -441,12 +533,14 @@ generation-based accuracy evaluation that does.
 | **D** — held-out descriptions | hold out ≥1 paraphrase per task | instruction generalization |
 | **T** — held-out tasks | whole tasks withheld (rows *and* descriptions); once several domains exist, also a held-out **domain** | zero-shot instruction → LoRA |
 
-⚠️ **The D axis needs ≥2 descriptions per task and today every task has exactly 1.** Handle it in
-this order: (a) the split code degrades gracefully and reports D-metrics as `n/a` with a warning;
-(b) optionally add `scripts/paraphrase_descs.py` (local Qwen generation, ~8 paraphrases per task,
-with contrastive-sibling dedup so paraphrases don't blur across tasks); (c) once new multi-domain
-tasks arrive, author several descriptions per task up front. Until D exists, `other_task_descs` and
-`gibberish_descs` still give a valid steering signal.
+⚠️ **The D axis needs ≥2 descriptions per task and today every v2/v3/v4 task has exactly 1.**
+Handle it in this order: (a) the split code degrades gracefully and reports D-metrics as `n/a` with
+a warning; (b) **done** — `scripts/paraphrase_descs.py` (local Qwen generation, ~8 paraphrases per
+task, with contrastive-sibling dedup so paraphrases don't blur across tasks); see
+`docs/06_description_augmentation_v5.md` for the design and its `v5` namespace (kept fully
+separate from `v3`'s own task dirs — see that doc for why); (c) once new multi-domain tasks
+arrive, author several descriptions per task up front. Until D exists for a given task family,
+`other_task_descs` and `gibberish_descs` still give a valid steering signal.
 
 ### Seven description conditions, all scored on the same held-out questions
 

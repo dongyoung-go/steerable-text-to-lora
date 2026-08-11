@@ -1,0 +1,12 @@
+# Arm (2) Instance, OFF/OFF -- README section 4: same-iteration critique, no internalization/
+# calibration, pooled original+refined rollouts scored under true generating context (faithful
+# Critique-GRPO reproduction -- the sanity gate every other arm's trust depends on, per README
+# section 4's success criteria).
+custom:
+  reward_data_source: math
+  custom_reward_function:
+    path: tmgrpo/verl_hooks.py
+    name: compute_score
+  conditioning: critique       # tmgrpo/critique.py generate_critique() + pool_original_and_refined()
+  internalization: false
+  calibration: false

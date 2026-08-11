@@ -1,0 +1,12 @@
+# Arm (4) Trajectory, OFF/OFF -- README section 4: rollouts conditioned on textual momentum
+# M_{t-1} (tmgrpo/trajectory.py), scored under that same conditioned context -- no
+# internalization. Shows what momentum-conditioning buys WITHOUT internalizing it (README
+# section 4, arm (4) purpose: gains stay locked behind needing M at inference).
+custom:
+  reward_data_source: math
+  custom_reward_function:
+    path: tmgrpo/verl_hooks.py
+    name: compute_score
+  conditioning: momentum       # tmgrpo/trajectory.py TrajectoryState.step() -> M_t, injected via inject_conditioning_context()
+  internalization: false
+  calibration: false

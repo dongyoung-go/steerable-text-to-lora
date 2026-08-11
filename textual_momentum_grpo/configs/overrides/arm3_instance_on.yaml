@@ -1,0 +1,11 @@
+# Arm (3) Instance, ON/ON -- README section 4: same critique as arm (2), but internalization ON
+# (unconditioned-scoring gradient target) and calibration ON (token-level w_t reweighting). ICRL-style.
+custom:
+  reward_data_source: math
+  custom_reward_function:
+    path: tmgrpo/verl_hooks.py
+    name: compute_score
+  conditioning: critique
+  internalization: true       # tmgrpo/verl_hooks.py recompute_unconditioned_logprobs() -- NOT YET IMPLEMENTED, see that function's docstring
+  calibration: true           # tmgrpo/calibration.py apply_calibration()
+  calibration_w_max: 5.0      # = base.yaml's custom.calibration_w_max; restated here for readability of this arm's full diff

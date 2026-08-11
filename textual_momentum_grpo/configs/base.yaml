@@ -1,0 +1,69 @@
+# Shared verl trainer config for all 5 arms (README section 4/5). Applied as:
+#   python3 -m verl.trainer.main_ppo --config-path=<this dir> --config-name=base [arm overrides]
+#
+# Every value below is either cited to a same-repo reference (self_correct_grpo's vendored ICRL
+# hydra configs, a Qwen3-family GRPO run on MATH -- as close a match as this repo has) or flagged
+# as unconfirmed. Key *names* follow verl's documented config surface
+# (https://verl.readthedocs.io/en/latest/examples/config.html and
+# https://verl.readthedocs.io/en/latest/algo/dapo.html for the asymmetric clip keys) but have not
+# been checked against an actual verl install (no GPU in the build sandbox -- see
+# docs/build_and_run_guide.md). Re-verify every key here against `python -m verl.trainer.main_ppo
+# --help` (or the installed config schema) before the first real run, and fix anything that has
+# drifted rather than assuming this file is correct as written.
+
+algorithm:
+  adv_estimator: grpo
+  use_kl_in_reward: false  # GRPO uses the actor's own KL loss term instead (below), per verl docs
+
+data:
+  train_batch_size: 16          # = rollout_batch_size, self_correct_grpo/vendor/ICRL/icrl/hydra_conf/rollout/base.yaml
+  max_prompt_length: 1024        # unconfirmed -- ICRL reference uses rollout_max_context_len=16384 for
+                                  # an agentic env; MATH single-turn prompts are far shorter. Retune from
+                                  # observed prompt-length histogram once data prep (scripts/prepare_math_train.py) has run.
+  max_response_length: 2048     # rollout_max_response_len, self_correct_grpo/vendor/ICRL/icrl/hydra_conf/rollout/base.yaml
+
+actor_rollout_ref:
+  model:
+    path: Qwen/Qwen3-8B  # README section 5: shared reference point for both Critique-GRPO and ICRL reproductions
+  actor:
+    optim:
+      lr: 1.0e-6          # self_correct_grpo/vendor/ICRL/icrl/hydra_conf/optimizer/adam_base.yaml
+                          # (written 1.0e-6, not 1e-6 -- PyYAML's safe_load only recognizes the
+                          # float suffix with a decimal point; 1e-6 parses as a string otherwise)
+      # adam_beta1=0.9, adam_beta2=0.98, weight_decay=0.1, lr_decay_style=constant in the ICRL
+      # reference (same file) -- NOT set here because verl's optim config key names for these are
+      # unconfirmed (verl's default optimizer is AdamW with library defaults, e.g. betas
+      # (0.9, 0.999)). Flagged risk, not silently matched: check verl's actual
+      # `actor_rollout_ref.actor.optim` schema and set these explicitly to the ICRL reference
+      # values above once verl is installed on the GPU node.
+    ppo_mini_batch_size: 16    # = data.train_batch_size (one full batch per PPO update, no sub-splitting)
+    clip_ratio_low: 0.2        # eps_clip, self_correct_grpo/vendor/ICRL/icrl/hydra_conf/algo/grpo.yaml
+    clip_ratio_high: 0.28      # eps_clip_high, same file (DAPO-style asymmetric "clip-higher")
+    entropy_coeff: 0.0         # entropy_coef, same file
+    use_kl_loss: true          # same file
+    kl_loss_coef: 0.0          # kl_loss_coef, same file (KL loss enabled but zero-weighted, matching reference)
+    kl_loss_type: low_var_kl   # same file
+  rollout:
+    name: vllm
+    n: 8                       # n_samples_per_prompt (GRPO group size), self_correct_grpo/vendor/ICRL/icrl/hydra_conf/rollout/base.yaml
+    temperature: 1.0           # rollout_temperature, same file
+    response_length: 2048      # = data.max_response_length
+    calculate_log_probs: true  # required for the calibration-ratio (w_t) computation, arms 3/5 -- see tmgrpo/calibration.py
+
+trainer:
+  total_epochs: 1               # step count instead governed by n_rollout_steps below (num_rollout analog)
+  n_rollout_steps: 300          # num_rollout, self_correct_grpo/vendor/ICRL/icrl/hydra_conf/rollout/base.yaml
+                                 # (~2 orders of magnitude below ICRL's own num_rollout=3000 full-scale runs --
+                                 # same "cheap pilot" framing self_correct_grpo used, see its docs/pilot_setup.md)
+  test_freq: 10                 # eval_interval, self_correct_grpo/vendor/ICRL/icrl/hydra_conf/eval/base.yaml
+  save_freq: 50                 # save_interval, self_correct_grpo/vendor/ICRL/icrl/hydra_conf/checkpoint/base.yaml
+  n_gpus_per_node: 1             # single B200, README section 5
+  nnodes: 1
+
+# Frontier-model role (critique / textual gradient / digest / momentum) is NOT part of verl's own
+# config -- it's driven by tmgrpo's own reward/hook functions, wired per-arm in
+# configs/overrides/arm{1..5}_*.yaml and merged onto this file by scripts/render_arm_config.py.
+# They call tmgrpo.llm_client.LLMClient(model="gpt-5-mini") directly.
+custom:
+  frontier_model: gpt-5-mini  # confirmed decision -- do not change without asking again
+  calibration_w_max: 5.0      # tmgrpo/calibration.py W_MAX -- unconfirmed placeholder, retune from observed w_t trajectory (README section 6)
