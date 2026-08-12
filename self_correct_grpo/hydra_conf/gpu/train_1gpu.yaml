@@ -33,6 +33,6 @@ ray_job:
   address: http://127.0.0.1:8265
   runtime_env:
     env_vars:
-      PYTHONPATH: /root/Megatron-LM/
+      PYTHONPATH: ${oc.env:MEGATRON_LM_DIR,/root/Megatron-LM}/
       CUDA_DEVICE_MAX_CONNECTIONS: "1"
       NCCL_NVLS_ENABLE: "0"

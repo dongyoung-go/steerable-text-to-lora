@@ -16,3 +16,12 @@ data/
 
 .env
 !.env.example
+
+self_correct_grpo/vendor/ICRL/icrl/runs/
+self_correct_grpo/vendor/ICRL/models/
+self_correct_grpo/vendor/ICRL/slime.egg-info/
+self_correct_grpo/vendor/ICRL/tensorboard_log/
+textual_momentum_grpo/.build-tmp/
+textual_momentum_grpo/.conda-nvcc128/
+textual_momentum_grpo/.cuda128-home/
+textual_momentum_grpo/models/

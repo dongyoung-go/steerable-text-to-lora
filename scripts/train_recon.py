@@ -76,6 +76,12 @@ def main() -> int:
             f"cosine_similarity={last.get('cosine_similarity')}"
         )
     print(f"checkpoint written to {args.out}/latest.pt")
+    if result.get("best_cosine_similarity") is not None:
+        print(
+            f"best checkpoint written to {args.out}/best.pt "
+            f"(cosine_similarity={result['best_cosine_similarity']:.4f}) -- "
+            "prefer this over latest.pt for SFT warm-start if it collapsed late"
+        )
     return 0
 
 

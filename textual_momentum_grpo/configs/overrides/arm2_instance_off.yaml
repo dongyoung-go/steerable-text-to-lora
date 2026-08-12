@@ -2,11 +2,15 @@
 # calibration, pooled original+refined rollouts scored under true generating context (faithful
 # Critique-GRPO reproduction -- the sanity gate every other arm's trust depends on, per README
 # section 4's success criteria).
-custom:
-  reward_data_source: math
+custom_reward_function:      # top-level -- copied into reward.custom_reward_function by some verl code paths
+  path: tmgrpo/verl_hooks.py
+  name: compute_score
+reward:                      # main_ppo's actual reward-manager path reads config.reward.custom_reward_function
   custom_reward_function:
     path: tmgrpo/verl_hooks.py
     name: compute_score
+custom:
+  reward_data_source: math
   conditioning: critique       # tmgrpo/critique.py generate_critique() + pool_original_and_refined()
   internalization: false
   calibration: false

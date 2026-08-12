@@ -6,9 +6,12 @@ them directly -- they log per-role/per-round success *rates* for monitoring, not
 per-episode (r(tau1), r(tau2)) deltas this pilot needs. Rather than fork vendored logging code
 (which would break the "vendor/ICRL stays byte-for-byte upstream" property -- see
 `../vendor/README.md`), this script reconstructs per-episode round sequences directly from the
-plaintext trajectory dumps that `_save_rollout_trajectories` already writes to
-`{exp_dir}/rollouts_train/train_<rollout_id>.txt` for every training rollout, unmodified, in both
-the gated and ungated arm (both still call vendored `icrl.logging_utils.log_rollout_data`).
+plaintext trajectory dumps that `_save_rollout_trajectories` already writes, unmodified, for every
+rollout batch (train or eval) -- see docs/pilot_eval_design.md for why this pilot's decisive
+comparison is two *eval-only* passes (`{exp_dir}/rollouts_eval/eval_<rollout_id>.txt`) against one
+gated-trained checkpoint, gated vs. ungated inference, rather than two separately-trained arms'
+training-rollout streams (`rollouts_train/train_<rollout_id>.txt`, still supported via --split
+train for that earlier, superseded comparison).
 
 Dump format (one entry per executor/critic sample; entries within an episode separated by a
 `--------` line, episodes separated by `========`):
@@ -30,10 +33,12 @@ Definitions (matching self_correct_grpo_README.md §1.1 / §6.3), per episode:
     no-op rate   = fraction of episodes with r2 == r1
 
 Usage:
-    python compute_pilot_metrics.py --gated-dir <exp_dir_gated> --ungated-dir <exp_dir_ungated>
+    python compute_pilot_metrics.py --gated-dir <exp_dir_gated> --ungated-dir <exp_dir_ungated> \
+        [--split eval|train]
 
-Each `--*-dir` should be an ICRL `exp_dir` (containing `rollouts_train/`), or the
-`rollouts_train/` directory itself.
+Each `--*-dir` should be an ICRL `exp_dir` (containing `rollouts_eval/` or `rollouts_train/`), or
+that directory itself. `--split` defaults to `eval` (the current pilot design); pass `--split train`
+to reproduce the earlier, superseded two-separately-trained-arms comparison.
 """
 
 from __future__ import annotations
@@ -150,20 +155,22 @@ def compute_metrics(outcomes: list[EpisodeOutcome]) -> PilotMetrics:
     )
 
 
-def _resolve_rollouts_dir(path: Path) -> Path:
-    if path.name == "rollouts_train":
+def _resolve_rollouts_dir(path: Path, split: str) -> Path:
+    dirname = f"rollouts_{split}"
+    if path.name == dirname:
         return path
-    candidate = path / "rollouts_train"
+    candidate = path / dirname
     return candidate if candidate.is_dir() else path
 
 
-def load_metrics_for_dir(exp_dir: Path) -> PilotMetrics:
-    rollouts_dir = _resolve_rollouts_dir(exp_dir)
+def load_metrics_for_dir(exp_dir: Path, split: str = "eval") -> PilotMetrics:
+    rollouts_dir = _resolve_rollouts_dir(exp_dir, split)
     if not rollouts_dir.is_dir():
-        raise FileNotFoundError(f"no rollouts_train/ directory found under {exp_dir}")
+        raise FileNotFoundError(f"no rollouts_{split}/ directory found under {exp_dir}")
 
+    prefix = "train" if split == "train" else "eval"
     outcomes: list[EpisodeOutcome] = []
-    for dump_file in sorted(rollouts_dir.glob("train_*.txt")):
+    for dump_file in sorted(rollouts_dir.glob(f"{prefix}_*.txt")):
         entries = parse_trajectory_dump(dump_file.read_text())
         outcomes.extend(group_into_episodes(entries))
     return compute_metrics(outcomes)
@@ -181,10 +188,19 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--gated-dir", type=Path, required=True)
     parser.add_argument("--ungated-dir", type=Path, required=True)
+    parser.add_argument(
+        "--split",
+        choices=["eval", "train"],
+        default="eval",
+        help="Which rollout dumps to read. 'eval' (default) matches this pilot's current design: "
+        "gated-inference vs. ungated-inference eval-only passes against one gated-trained "
+        "checkpoint (see docs/pilot_eval_design.md). 'train' reproduces the earlier, superseded "
+        "two-separately-trained-arms comparison.",
+    )
     args = parser.parse_args()
 
-    gated = load_metrics_for_dir(args.gated_dir)
-    ungated = load_metrics_for_dir(args.ungated_dir)
+    gated = load_metrics_for_dir(args.gated_dir, args.split)
+    ungated = load_metrics_for_dir(args.ungated_dir, args.split)
 
     print(_format_row("gated", gated))
     print(_format_row("ungated", ungated))

@@ -298,6 +298,151 @@ mechanism and identical downstream loss, does learn real (if still modest) steer
 exact codebase — see docs/04 §14 for the confirmation at the downstream-accuracy level and the
 current recommendation to trust `sft_scratch_v3` over `sft_warmstart_v3`.
 
+### Update (2026-08-11): the "dataset scale" story above was incomplete — recon collapse is a fixable training-dynamics bug, reproduced identically in v4
+
+Re-running `recon_v4` (same trainer, same `configs/recon.yaml`, different — comprehensive-feedback
+— task dirs, see `docs/05_comprehensive_feedback_v4.md`) hit the **exact same collapse pattern**:
+`cosine_similarity` climbs for several hundred steps (v4: to 0.23 by step 1000, actually a much
+better transient peak than v3's 0.025), then one large loss spike (v3: step 700, `train_loss`
+0.989→1.644; v4: step 1100, `train_loss` 0.896→1.113), then permanent flatline at the "predict
+the mean" value for the rest of the run, in both experiments independently. Two independent runs
+hitting the identical failure signature — sharp spike then permanent, unrecoverable flatline — is
+a strong signal of a specific optimizer-stability bug, not merely "not enough data to fit," even
+though the data-scale argument above likely still contributes (a harder-to-fit regression target
+makes any given optimizer step riskier).
+
+**Root cause**: `train_recon`'s LR schedule (`trainers/recon.py`) only warms up over
+`warmup_frac=0.03` (60 of 2000 steps) then holds **flat** at the full `lr=5e-4` for the rest of
+training, with **no gradient clipping** at all (unlike `trainers/sft.py`, which clips at
+`max_grad_norm=1.0`). A constant, undecayed 5e-4 LR under AdamW, on an unbounded L1 regression
+loss with no clipping, is exactly the setup that lets one late large step knock `out_B`'s
+weight/bias back near zero — which re-triggers the *same* dead-gradient fixed point
+`SteerableHyperLoRA._apply_zero_init`'s own docstring warns about for step 0 (`out_B == 0` ⟹
+`dL/dA ~ B == 0` ⟹ everything upstream idle too), except past step 0 there is no "only `out_B`
+moves first" unblocking mechanism to escape it a second time — so the collapse is permanent, and
+raises nothing.
+
+**Fix applied** (`src/steerable_t2l/trainers/recon.py`, `configs/recon.yaml`):
+1. LR schedule: warmup then **cosine decay to 0** by `max_steps`, replacing the flat-after-warmup
+   schedule — keeps late steps small enough not to re-cross the dead-gradient point.
+2. Gradient-norm clipping added (`max_grad_norm: 1.0`, new `ReconConfig` field) — `train_recon`
+   previously had none at all.
+3. Best-checkpoint selection: `train_recon` now also writes `<out_dir>/best.pt` (same schema as
+   `latest.pt`), updated only when a step's `cosine_similarity` beats the best seen so far — a
+   safety net so a late collapse (if it still happens despite 1-2) doesn't silently hand SFT
+   warm-start a degenerate checkpoint the way `sft_warmstart_v3`/`_v4` both did. Both
+   `run_03c_training_validation_v3.sh` and `run_03_training_validation_v4.sh` now pass
+   `--init-from .../recon_{v3,v4}/best.pt` instead of `latest.pt`.
+
+**Not yet re-verified experimentally** — `recon_v3`/`recon_v4` and both SFT arms have not been
+re-run against this fix yet (would need `--force` on the recon stage, since `latest.pt` already
+exists for both). Until that re-run happens, treat the "scratch beats warmstart" recommendation
+above as still current, but no longer attributed solely to dataset scale — it may well reverse
+once recon stops collapsing.
+
+### Update (2026-08-12): re-ran v3 against the fix (`run_all_warmupfix_v3.sh --full`) — collapse is delayed and shallower, not eliminated; warmstart is no longer dead but still doesn't beat scratch on raw accuracy
+
+**Recon stage**: the fix raised the pre-collapse peak and delayed the collapse step, but did not
+prevent it — `recon_v3` still hits the same dead-gradient fixed point, just later and less deep:
+
+| | pre-fix | post-fix |
+|---|---|---|
+| peak `cosine_similarity` | 0.025 @ step 600 | 0.084 @ step 800 |
+| collapse step | 700 | 900 |
+| post-collapse value | ~0.0002 (flat) | ~0.001–0.009 (still flat) |
+
+`best.pt` (step 800) is a genuinely better checkpoint than the fully-dead `latest.pt` (step 2000,
+cosine_similarity 0.0088) it replaces as SFT's `--init-from`, but it is still a barely-converged
+recon stage — 0.084 is only modestly above noise, nowhere near a strong prior for SFT to build on.
+
+**SFT + downstream eval**: warmstart went from completely dead to clearly non-trivial, but scratch
+still wins on raw `t2l_train_desc` accuracy in both eval sets:
+
+| | pre-fix warmstart | post-fix warmstart | scratch |
+|---|---|---|---|
+| steering_margin (loss-level) @ step 2000, vs_gibberish | ~0.000 (pinned) | 0.319 | 0.205 |
+| steering_margin (loss-level) @ step 2000, vs_other_task | ~0.000 (pinned) | 0.369 | 0.226 |
+| Q-holdout `t2l_train_desc` acc | 0.471 | 0.518 | **0.543** |
+| Q-holdout margin vs gibberish | 0.016 | 0.032 | **0.085** |
+| Q-holdout margin vs other-task | 0.006 | 0.091 | **0.108** |
+| Full-test `t2l_train_desc` acc | 0.387 | 0.469 | **0.484** |
+| Full-test margin vs gibberish | −0.013 | 0.037 | **0.096** |
+| Full-test margin vs other-task | 0.001 | **0.076** | 0.070 |
+
+Warmstart only edges out scratch on one metric (full-test margin vs other-task); scratch wins raw
+accuracy and the vs-gibberish margin in both eval sets. So the fix repaired warmstart (it's no
+longer worse than noise) without reversing the "trust scratch" recommendation above — it just
+weakens the margin by which scratch wins.
+
+**Why scratch still wins on raw accuracy despite warmstart no longer being broken**: the two SFT
+arms don't just differ in their starting weights — `build_param_groups`
+(`src/steerable_t2l/trainers/sft.py:119-135`) also puts them on very different learning rates,
+and that gap is what decides the 2000-step race:
+
+```python
+if not warm_started:
+    return [{"params": all_params, "lr": config.lr_from_scratch, "name": "all"}]   # 1e-4, everything
+# else:
+{"params": groups["backbone_lora"], "lr": config.lr_backbone_lora, "name": "backbone_lora"},  # 2e-6
+{"params": head_params, "lr": config.lr_heads, "name": "heads"},                              # 2e-5
+```
+
+`configs/sft.yaml`/`configs/sft_warmstart.yaml` give scratch `lr_from_scratch=1e-4` on every
+parameter, while warmstart trains its backbone LoRA 50x slower (`lr_backbone_lora=2e-6`) and its
+heads 5x slower (`lr_heads=2e-5`). That throttle is calibrated for the case where the recon
+init is already a strong prior worth preserving with gentle fine-tuning — but recon only reaches
+`cosine_similarity≈0.084` before collapsing, which is not a strong prior. So warmstart pairs a
+weak init with a much slower learning rate, in the same fixed 2000-step budget scratch gets to
+use at full speed. Scratch's higher LR lets it cover more ground in that budget and both catch up
+to and pass warmstart's raw accuracy, even though warmstart's init gives it a real (if narrow)
+edge on the other-task steering margin, where the slower LR lets it exploit that weak signal
+cleanly instead of getting drowned out by a noisier high-LR search.
+
+A longer-horizon or LR-matched re-run (e.g. give warmstart a few hundred warmup steps at a higher
+LR, or extend `max_steps` well past 2000 so the low-LR arm has time to catch up) would be needed
+to tell whether warmstart's raw-accuracy deficit is a budget artifact or a real ceiling — not yet
+attempted.
+
+### Update (2026-08-12, second round): global-norm clipping doesn't protect `heads` — per-group clip/LR added; near-zero init rejected
+
+The 2026-08-12 fix above (cosine LR decay + one global `clip_grad_norm_` over all ~158M
+hypernetwork parameters) delayed and shrank the collapse but did not prevent it (peak
+`cosine_similarity` 0.084 @ step 800, collapse @ step 900 — see the table above). Diagnosis:
+`clip_grad_norm_(hypernet.parameters(), max_grad_norm)` computes **one norm across the whole
+model**. `heads` (`bottleneck`/`out_A`/`out_B` — the exact pathway with the dead-gradient fixed
+point `_apply_zero_init` warns about) is a small fraction of total parameters, so a locally huge
+update to `heads` can leave the global norm comfortably under threshold while still knocking
+`out_B` back toward zero. A global clip protects against whole-model blowups; it does nothing for
+a spike localized to one small, fragile submodule.
+
+**Fix applied** (`src/steerable_t2l/trainers/recon.py`, `configs/recon.yaml`):
+1. **Per-group gradient clipping** — `heads` is now clipped separately, at a much tighter norm
+   (`max_grad_norm_heads: 0.1` vs. `max_grad_norm: 1.0` for everything else).
+2. **Differential per-group learning rate** — new `ReconConfig` fields `lr_backbone_lora` and
+   `lr_heads` (both `5e-5` by default), applied via a new `build_param_groups` helper (mirrors
+   `trainers/sft.py`'s existing per-group-LR pattern). `queries`/`refiner`/`shared_decoder` share
+   the base `lr`.
+3. **Lower base LR** — `lr` dropped from `5e-4` to `2e-4`; the encoder here is far higher-capacity
+   than reference T2L's frozen-embedding setup and is being fit to only 576 examples, so gentler
+   steps are warranted independent of the collapse issue.
+
+**Rejected**: initializing `out_B` near-zero instead of exactly zero (removes the literal
+fixed point) was considered but **not applied** — it would give `backbone_lora`/`queries`/
+`refiner`/`shared_decoder` a nonzero gradient at step 0, breaking
+`tests/test_grad_flow.py::test_step_zero_upstream_is_idle`'s intentionally-guarded "only `out_B`
+moves first" contract (that test's own docstring says "Do not relax it"). The exact-zero-init
+step-0 lag is a deliberate design choice, not an oversight, so this fix was dropped rather than
+relaxing it.
+
+**Not yet re-verified experimentally** — this second round of fixes has not yet been run against
+`recon_v3`/`recon_v5`. The `v5` experiment (`docs/06_description_augmentation_v5.md`,
+`run_all_v5.sh`) — which gives every task dir up to 8 description paraphrases instead of v3's
+exactly 1 — is the natural next real run: it attacks the *data* side of the collapse (recon has
+no phrasing-invariant signal to learn from with 1 description/task) independently of this
+session's *optimizer*-side fixes, and reuses v3's oracle LoRAs (no retraining needed there, per
+docs/06). Running `v3` once more against just this round's fixes (isolated from the `v5` data
+change) first, then `v5` with the same fixed trainer, would separate the two effects.
+
 ---
 
 ## 1. Data pipeline — domain-general from day one

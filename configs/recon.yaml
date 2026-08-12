@@ -1,7 +1,13 @@
-# ReconConfig. See docs/03_training_validation.md §2, Stage C.
-lr: 5.0e-4
+# ReconConfig. See docs/03_training_validation.md §2, Stage C, and the 2026-08-12 update on
+# per-group LR/clipping (a single global clip does not protect `heads` from the late-training
+# collapse hazard -- see trainers/recon.py's module docstring).
+lr: 2.0e-4
+lr_backbone_lora: 5.0e-5
+lr_heads: 5.0e-5
 max_steps: 2000
 warmup_frac: 0.03
+max_grad_norm: 1.0
+max_grad_norm_heads: 0.1
 batch_size: 64
 val_freq: 100
 seed: 0

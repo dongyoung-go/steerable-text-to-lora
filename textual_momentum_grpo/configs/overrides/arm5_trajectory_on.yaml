@@ -2,11 +2,15 @@
 # plus internalization + calibration (arm (3)'s machinery, reused unchanged, applied to momentum
 # context instead of critique context). This is the arm the paper's central claim rests on:
 # success criteria are (5) > (4) and (5) > (3), README section 4.
-custom:
-  reward_data_source: math
+custom_reward_function:      # top-level -- copied into reward.custom_reward_function by some verl code paths
+  path: tmgrpo/verl_hooks.py
+  name: compute_score
+reward:                      # main_ppo's actual reward-manager path reads config.reward.custom_reward_function
   custom_reward_function:
     path: tmgrpo/verl_hooks.py
     name: compute_score
+custom:
+  reward_data_source: math
   conditioning: momentum
   internalization: true       # same NOT-YET-IMPLEMENTED caveat as arm 3 -- see tmgrpo/verl_hooks.py
   calibration: true

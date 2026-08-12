@@ -48,9 +48,13 @@ def check_answer(prediction: str, label: str) -> bool:
     boxed = extract_boxed_answer(prediction)
     candidate = boxed if boxed is not None else prediction
     try:
-        parsed_pred = parse(f"${candidate}$")
-        parsed_label = parse(f"${label}$")
-        return bool(verify(parsed_label, parsed_pred))
+        # parsing_timeout=None: math_verify's default timeout uses signal.alarm(), which only
+        # works in the interpreter's main thread. verl's reward manager calls this function from
+        # a worker thread (via asyncio's run_in_executor), so the default raises a ValueError on
+        # every call -- silently caught below and (before this fix) always scored as wrong.
+        parsed_pred = parse(f"${candidate}$", parsing_timeout=None)
+        parsed_label = parse(f"${label}$", parsing_timeout=None)
+        return bool(verify(parsed_label, parsed_pred, timeout_seconds=None))
     except Exception:
         return False
 

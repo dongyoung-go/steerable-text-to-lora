@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 
 from tasks import TASKS, build_user_prompt
@@ -51,7 +52,7 @@ def main(args: argparse.Namespace) -> None:
         build_chat_prompt(tokenizer, build_user_prompt(args.task, row.question), args.enable_thinking)
         for row in rows
     ]
-    outputs = llm.generate(prompts, sampling_params, use_tqdm=False)
+    outputs = llm.generate(prompts, sampling_params, use_tqdm=True)
 
     per_row = []
     n_correct = 0
@@ -65,7 +66,7 @@ def main(args: argparse.Namespace) -> None:
     result = {"task": args.task, "checkpoint": args.checkpoint, "n": n, "n_correct": n_correct,
               "pass_at_1": (n_correct / n) if n else float("nan"), "rows": per_row}
     Path(args.out).write_text(json.dumps(result, indent=2))
-    print(f"[eval_heldout] task={args.task} n={n} pass@1={result['pass_at_1']:.4f}")
+    print(f"[eval_heldout] task={args.task} n={n} pass@1={result['pass_at_1']:.4f}", flush=True)
 
 
 def build_argparser() -> argparse.ArgumentParser:
@@ -85,3 +86,6 @@ def build_argparser() -> argparse.ArgumentParser:
 
 if __name__ == "__main__":
     main(build_argparser().parse_args())
+    # See sampling.py's matching os._exit(0) comment -- vLLM's V1 engine teardown can
+    # deadlock; output files and flush=True prints above are already durably written.
+    os._exit(0)

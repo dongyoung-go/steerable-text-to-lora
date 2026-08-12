@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import random
 from collections import defaultdict
 from pathlib import Path
@@ -109,7 +110,7 @@ def main(args: argparse.Namespace) -> None:
         prev = Path(args.prev_feedback).read_text().strip() if args.prev_feedback and Path(args.prev_feedback).exists() else ""
         local_feedback_path.write_text("")
         feedback_path.write_text(prev)
-        print("[feedback] no (correct, incorrect) pairs available this round; carried forward previous feedback")
+        print("[feedback] no (correct, incorrect) pairs available this round; carried forward previous feedback", flush=True)
         return
 
     llm, tokenizer = load_vllm_engine(
@@ -124,7 +125,7 @@ def main(args: argparse.Namespace) -> None:
         ))
         for t in triples
     ]
-    stage1_outputs = llm.generate(stage1_prompts, stage1_params, use_tqdm=False)
+    stage1_outputs = llm.generate(stage1_prompts, stage1_params, use_tqdm=True)
     local_feedbacks = [o.outputs[0].text.strip() for o in stage1_outputs]
 
     with open(local_feedback_path, "w") as f:
@@ -138,11 +139,11 @@ def main(args: argparse.Namespace) -> None:
     critiques_block = "\n".join(f"- {lf}" for lf in local_feedbacks)
     stage2_prompt = STAGE2_PROMPT.format(previous=previous or "(none yet)", critiques=critiques_block, max_words=args.max_words)
     stage2_params = SamplingParams(temperature=args.temperature, top_p=0.95, max_tokens=args.max_tokens)
-    stage2_output = llm.generate([build_chat_prompt(tokenizer, stage2_prompt)], stage2_params, use_tqdm=False)
+    stage2_output = llm.generate([build_chat_prompt(tokenizer, stage2_prompt)], stage2_params, use_tqdm=True)
     merged = stage2_output[0].outputs[0].text.strip()
 
     feedback_path.write_text(merged)
-    print(f"[feedback] n={len(triples)} merged feedback length (words)={len(merged.split())}")
+    print(f"[feedback] n={len(triples)} merged feedback length (words)={len(merged.split())}", flush=True)
 
 
 def build_argparser() -> argparse.ArgumentParser:
@@ -163,3 +164,6 @@ def build_argparser() -> argparse.ArgumentParser:
 
 if __name__ == "__main__":
     main(build_argparser().parse_args())
+    # See sampling.py's matching os._exit(0) comment -- vLLM's V1 engine teardown can
+    # deadlock; output files and flush=True prints above are already durably written.
+    os._exit(0)

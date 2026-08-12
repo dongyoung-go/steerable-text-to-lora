@@ -1,9 +1,13 @@
 # 06 — Description-paraphrase augmentation (v5 experiment)
 
-**Status: IMPLEMENTED and run.** `scripts/paraphrase_descs.py` passes `ruff`/`pytest` on CPU
-(`tests/test_paraphrase_descs.py`); the real generation run against the `v5` task-dir copies has
-been executed on the B200 node (see "Results" below). No splits/training/eval have been run
-against `v5` yet — see "What's not built yet."
+**Status: data generation IMPLEMENTED and run; pipeline scripts IMPLEMENTED, not yet run --full.**
+`scripts/paraphrase_descs.py` passes `ruff`/`pytest` on CPU (`tests/test_paraphrase_descs.py`); the
+real generation run against the `v5` task-dir copies has been executed on the B200 node (see
+"Results" below). The rest of the pipeline (`configs/data_v5.yaml`,
+`scripts/reuse_oracle_loras.py`, `run_03_training_validation_v5.sh`,
+`run_04_downstream_eval_v5.sh`, `run_all_v5.sh`, `scripts/compare_downstream_eval.py`) is now built
+and passes `ruff`/`pytest` (CPU-only, no `--full`) — see "What's not built yet" for what's left,
+which is now only the actual `--full` GPU run and result logging.
 
 ## Motivation
 
@@ -169,22 +173,47 @@ a 0.01 margin can't be cleared — see "Margin tuning" above.
 `v3`'s own task dirs were verified unaffected: all 576 confirmed still at exactly 1 description
 each after this run (the augmentation only ever touched the `v5`-named copies).
 
+## Pipeline scripts (implemented, not yet run --full)
+
+Everything below this line was unbuilt as of the "IMPLEMENTED and run" status above; it is now
+built (CPU-tested only, no GPU run yet):
+
+- `configs/data_v5.yaml` — mirrors `configs/data_v3.yaml`, pointed at
+  `[textgrad_repro_v5_*, gepa_repro_v5_*]`, own `cache_root: data/.cache_v5`.
+- `scripts/reuse_oracle_loras.py` (+ `tests/test_reuse_oracle_loras.py`) — since `v5`'s task dirs
+  share `v3`'s exact `(question, response)` rows (only `descriptions` differs), `v3`'s
+  already-trained oracle LoRAs are numerically identical to what training against `v5` would
+  produce. This script symlinks `outputs/oracle_loras_v5/<v5_name>` →
+  `outputs/oracle_loras_v3/<v3_name>` (and the canonicalized `.pt` equivalents) instead of
+  retraining — downstream consumers key oracle lookups strictly by task-dir name
+  (`Path(oracle_dir) / task.name`), so this rename step is required, not optional.
+- `run_03_training_validation_v5.sh` — mirrors `run_03_training_validation_v4.sh`'s shape (no
+  task-build stage; `v5`'s task dirs already exist). `--full`: `make_splits.py` fresh against `v5`
+  (the step that finally makes the D-axis non-degenerate, now that these tasks have >1 description
+  each) → `reuse_oracle_loras.py` → `train_recon.py` → `train_sft.py` ×2 (scratch + warmstart) →
+  `run_ablation.py`. Requires `outputs/oracle_loras_v3`/`outputs/oracle_loras_canon_v3` to already
+  exist.
+- `run_04_downstream_eval_v5.sh` — mirrors `run_04c_downstream_eval_v3.sh`'s winning-instruction
+  task scope (not `v4`'s full-scope eval), since `outputs/eval/downstream_accuracy_full_v3.json` —
+  the intended comparison target — was produced under that same restricted scope.
+  `scripts/select_best_prompt_tasks_v3.py` hardcodes the `_v3_` prefix, so this script instead
+  regenerates `data/best_prompt_tasks_v3.txt` fresh and derives `data/best_prompt_tasks_v5.txt` by
+  substituting `_v3_` → `_v5_` (verified 1:1 against `v5`'s task dirs), then runs both
+  `eval_downstream_accuracy.py` and `eval_downstream_accuracy_full.py` against the `v5` checkpoint/
+  splits/oracle dir.
+- `run_all_v5.sh` — mirrors `run_all_v4.sh`, orchestrating the two scripts above end to end.
+- `scripts/compare_downstream_eval.py` (+ `tests/test_compare_downstream_eval.py`) — diffs two
+  `downstream_accuracy_full_*.json` files (per-condition macro accuracy, macro comparisons, and a
+  per-task table joined by stripping the `v3_`/`v5_` infix from task names). Run as:
+  `python scripts/compare_downstream_eval.py outputs/eval/downstream_accuracy_full_v3.json outputs/eval/downstream_accuracy_full_v5.json --labels v3 v5`.
+
 ## What's not built yet
 
-This experiment only produced the augmented task-dir data (`v5`'s `metadata.yaml` files). Not yet
-built, and needed before `v5` can actually be trained/evaluated end to end:
+Only the actual GPU run and its result logging remain:
 
-- `configs/data_v5.yaml` (mirroring `configs/data_v3.yaml`, pointed at
-  `[textgrad_repro_v5_*, gepa_repro_v5_*]`).
-- `data/splits_v5.json` (`scripts/make_splits.py` run fresh against the `v5` task dirs) — this is
-  the step that will finally make the D-axis (`eval_descs`) non-degenerate, now that these tasks
-  have >1 description each.
-- `run_03c_training_validation_v5.sh`/`run_04c_downstream_eval_v5.sh`/`run_all_v5.sh` (mirroring
-  the `_v3` scripts, pointed at the `v5` namespace/configs/output paths) to actually train
-  oracle LoRAs (or reuse `v3`'s — same underlying data, only descriptions differ, so oracle
-  adapters trained against `v3`'s task dirs are numerically identical to what `v5` would produce;
-  worth reusing rather than retraining), run recon warm-start + SFT (both arms), and run the
-  downstream accuracy eval against the new checkpoints.
-- A direct comparison against `v3`'s already-diagnosed collapse (`outputs/eval/downstream_accuracy_full_v3.json`
-  vs. the `v5` equivalent) to confirm whether the added description diversity actually fixes the
-  steering collapse, per this experiment's original motivation.
+- Run `bash run_all_v5.sh --full` on the B200 node (needs `v3`'s oracle LoRAs already trained).
+- Run `scripts/compare_downstream_eval.py` against the resulting
+  `outputs/eval/downstream_accuracy_full_v5.json` and `v3`'s equivalent, and record a "Results"
+  section here (mirroring the generation-stage "Results" above) confirming whether the added
+  description diversity actually fixes the steering collapse, per this experiment's original
+  motivation.

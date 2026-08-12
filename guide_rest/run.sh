@@ -42,6 +42,11 @@ BATCH_SIZE="${BATCH_SIZE:-32}"  # measured throughput sweet spot on 1x B200; see
 GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.85}"
 MAX_MODEL_LEN="${MAX_MODEL_LEN:-8192}"
 SEED="${SEED:-0}"
+STEP_RETRIES="${STEP_RETRIES:-2}"  # retries per step after a timeout (e.g. vLLM engine-teardown hang) before giving up loudly
+SAMPLING_TIMEOUT="${SAMPLING_TIMEOUT:-10800}"
+FEEDBACK_TIMEOUT="${FEEDBACK_TIMEOUT:-3600}"
+TRAIN_TIMEOUT="${TRAIN_TIMEOUT:-28800}"  # 8h -- a full 14B LoRA fine-tune over the ~44k-pair full pool (7.4k questions x k=8 at the observed ~74% filter pass rate) is a multi-hour job; 90min was sized for a much smaller/smoke-test run
+EVAL_TIMEOUT="${EVAL_TIMEOUT:-2700}"
 
 GROW_POOL_SIZE_ARG=()
 if [ -n "$GROW_POOL_SIZE" ]; then
@@ -72,6 +77,11 @@ uv run \
   --batch_size "$BATCH_SIZE" \
   --gpu_memory_utilization "$GPU_MEMORY_UTILIZATION" \
   --max_model_len "$MAX_MODEL_LEN" \
-  --seed "$SEED"
+  --seed "$SEED" \
+  --step_retries "$STEP_RETRIES" \
+  --sampling_timeout "$SAMPLING_TIMEOUT" \
+  --feedback_timeout "$FEEDBACK_TIMEOUT" \
+  --train_timeout "$TRAIN_TIMEOUT" \
+  --eval_timeout "$EVAL_TIMEOUT"
 
 echo "done. results in data/guide_rest/${TASK}/{A,B}/summary.jsonl"

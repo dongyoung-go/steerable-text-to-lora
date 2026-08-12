@@ -111,7 +111,7 @@ def test_load_metrics_for_dir_reads_multiple_dump_files(tmp_path: Path):
     (rollouts_dir / "train_0.txt").write_text(SAMPLE_DUMP)
     (rollouts_dir / "train_1.txt").write_text(SAMPLE_DUMP)
 
-    metrics = load_metrics_for_dir(exp_dir)
+    metrics = load_metrics_for_dir(exp_dir, "train")
     assert metrics.num_episodes == 8
     assert metrics.fix_rate == pytest.approx(0.25)
 
@@ -121,13 +121,24 @@ def test_load_metrics_for_dir_accepts_rollouts_train_directly(tmp_path: Path):
     rollouts_dir.mkdir()
     (rollouts_dir / "train_0.txt").write_text(SAMPLE_DUMP)
 
-    metrics = load_metrics_for_dir(rollouts_dir)
+    metrics = load_metrics_for_dir(rollouts_dir, "train")
     assert metrics.num_episodes == 4
+
+
+def test_load_metrics_for_dir_reads_eval_dumps_by_default(tmp_path: Path):
+    exp_dir = tmp_path / "exp"
+    rollouts_dir = exp_dir / "rollouts_eval"
+    rollouts_dir.mkdir(parents=True)
+    (rollouts_dir / "eval_0.txt").write_text(SAMPLE_DUMP)
+
+    metrics = load_metrics_for_dir(exp_dir)
+    assert metrics.num_episodes == 4
+    assert metrics.fix_rate == pytest.approx(0.25)
 
 
 def test_load_metrics_for_dir_missing_raises(tmp_path: Path):
     with pytest.raises(FileNotFoundError):
-        load_metrics_for_dir(tmp_path / "nonexistent")
+        load_metrics_for_dir(tmp_path / "nonexistent", "train")
 
 
 def test_no_episodes_returns_zeroed_metrics():

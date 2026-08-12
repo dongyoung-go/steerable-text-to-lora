@@ -1,10 +1,14 @@
 # Arm (3) Instance, ON/ON -- README section 4: same critique as arm (2), but internalization ON
 # (unconditioned-scoring gradient target) and calibration ON (token-level w_t reweighting). ICRL-style.
-custom:
-  reward_data_source: math
+custom_reward_function:      # top-level -- copied into reward.custom_reward_function by some verl code paths
+  path: tmgrpo/verl_hooks.py
+  name: compute_score
+reward:                      # main_ppo's actual reward-manager path reads config.reward.custom_reward_function
   custom_reward_function:
     path: tmgrpo/verl_hooks.py
     name: compute_score
+custom:
+  reward_data_source: math
   conditioning: critique
   internalization: true       # tmgrpo/verl_hooks.py recompute_unconditioned_logprobs() -- NOT YET IMPLEMENTED, see that function's docstring
   calibration: true           # tmgrpo/calibration.py apply_calibration()

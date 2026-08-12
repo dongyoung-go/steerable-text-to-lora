@@ -18,7 +18,16 @@ with a clear NotImplementedError rather than a guessed, untested implementation.
 
 from __future__ import annotations
 
-from .reward import check_answer
+import os
+import sys
+
+# verl loads this file standalone via importlib (see verl.utils.import_utils.load_module),
+# not as part of the `tmgrpo` package, so relative imports fail with
+# "attempted relative import with no known parent package". Add the repo root to sys.path
+# and import absolutely instead.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from tmgrpo.reward import check_answer
 
 
 def compute_score(

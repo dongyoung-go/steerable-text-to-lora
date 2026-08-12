@@ -12,7 +12,7 @@ See docs/03_training_validation.md §3 and its handoff gotchas.
         --hypernet-config configs/hypernet.yaml \
         --target-dir Qwen/Qwen2.5-1.5B-Instruct --tasks-root /home/dg793/text-to-lora/tasks \
         --train-tasks 'textgrad_repro_gsm8k_*' --splits data/splits.json \
-        --init-from outputs/checkpoints/recon/latest.pt --out outputs/checkpoints/sft_warmstart
+        --init-from outputs/checkpoints/recon/best.pt --out outputs/checkpoints/sft_warmstart
 """
 
 from __future__ import annotations

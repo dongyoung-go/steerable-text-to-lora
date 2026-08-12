@@ -1,0 +1,25 @@
+# DataConfig -- v5 experiment. Same schema as configs/data_v3.yaml, but pointed at the
+# description-paraphrase-augmented copies of v3's task dirs (textgrad_repro_v5_*/gepa_repro_v5_*,
+# built by scripts/paraphrase_descs.py -- see docs/06_description_augmentation_v5.md). Each v5 task
+# dir is a byte-for-byte copy of its v3 counterpart's (question, response) training rows, with
+# ~1-8 paraphrased descriptions appended to `descriptions` instead of v3's single literal
+# instruction -- this is the whole point of the experiment: give build_recon_batches/
+# PerTaskDescDataset more than one phrasing per task to learn genuine phrasing-invariant,
+# content-sensitive conditioning from (v3's D-axis was universally `n/a`, see docs/06 for the full
+# collapse diagnosis this is meant to test a fix for). Fully separate cache_root from v3's so
+# tokenization caches never mix (descriptions differ, so cached encodings would silently be wrong
+# if shared).
+tasks_root: /home/dg793/text-to-lora/tasks
+train_tasks: [textgrad_repro_v5_*, gepa_repro_v5_*]
+
+# Same underlying (question, response) token content as v3 (see above) -- inherited unchanged from
+# configs/data_v3.yaml's profiled value (2026-08-04, p99=1393, max=2178). Description text is
+# longer/more numerous per task now (paraphrases), but descriptions are encoded separately from
+# the (question, response) pair this bound was profiled against -- re-profile by hand with
+# scripts/profile_lengths.py against the built v5 task dirs if that assumption turns out wrong.
+inp_max_len: 2560
+
+n_tasks_per_batch: 4
+n_points_per_task: 4
+val_batch_size: 32
+cache_root: data/.cache_v5

@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import random
 from pathlib import Path
 
@@ -86,7 +87,7 @@ def generate_and_score(
         user_contents.append(content)
     chat_prompts = [build_chat_prompt(tokenizer, c, enable_thinking) for c in user_contents]
 
-    outputs = llm.generate(chat_prompts, sampling_params, use_tqdm=False)
+    outputs = llm.generate(chat_prompts, sampling_params, use_tqdm=True)
 
     grow_path.write_text("")
     filtered_path.write_text("")
@@ -151,7 +152,7 @@ def main(args: argparse.Namespace) -> None:
         out_dir / "grow_samples.jsonl", out_dir / "filtered.jsonl",
     )
     (out_dir / "grow_stats.json").write_text(json.dumps(grow_stats, indent=2))
-    print(f"[sampling] task={args.task} pool={len(pool)} k={args.k} pass_rate={grow_stats['filter_pass_rate']:.4f}")
+    print(f"[sampling] task={args.task} pool={len(pool)} k={args.k} pass_rate={grow_stats['filter_pass_rate']:.4f}", flush=True)
 
     # Dev pool is always unconditioned (no feedback_prefix), even in Condition B: it
     # validates the bare question -> completion mapping train.py actually fits, and using
@@ -163,7 +164,7 @@ def main(args: argparse.Namespace) -> None:
     )
     (out_dir / "dev_stats.json").write_text(json.dumps(dev_stats, indent=2))
     print(f"[sampling] task={args.task} dev_pool={len(dev_pool)} dev_k={args.dev_k} "
-          f"dev_pass_rate={dev_stats['filter_pass_rate']:.4f}")
+          f"dev_pass_rate={dev_stats['filter_pass_rate']:.4f}", flush=True)
 
 
 def build_argparser() -> argparse.ArgumentParser:
@@ -191,3 +192,8 @@ def build_argparser() -> argparse.ArgumentParser:
 
 if __name__ == "__main__":
     main(build_argparser().parse_args())
+    # vLLM's V1 engine can deadlock during its own multiprocess teardown (EngineCore
+    # subprocess never exits -- see docs/01_train.md's timeout/retry section); all output
+    # files and the flush=True prints above are already durably written by this point, so
+    # skip Python's normal (deadlock-prone) interpreter shutdown entirely.
+    os._exit(0)

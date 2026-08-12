@@ -16,10 +16,40 @@ config dict, **not** as ``nn.Module`` buffers -- that is what keeps the recon an
 stage is a *warm start*: it teaches the query/head structure and moves ``B`` off zero. It
 cannot teach instruction generalization. Its only success criterion is the from-scratch vs.
 warm-started ablation.
+
+⚠️ **Late-training collapse hazard.** ``SteerableHyperLoRA._apply_zero_init``'s docstring
+warns that ``out_B.weight/bias == 0`` is a dead-gradient fixed point at step 0 by design
+(only ``out_B`` moves on step 1, unblocking everything else). Nothing stops the optimizer
+from being knocked back into that same fixed point *later* in training -- once it happens,
+the same dead-gradient argument applies permanently (no step-1-style unblocking mechanism
+exists past step 0), and the loss flatlines at the "predict ~0" value with no exception
+raised. Observed in practice: a flat (post-warmup) LR of 5e-4 with no gradient clipping
+produced exactly this -- ``cosine_similarity`` climbing for several hundred steps, then one
+large step, then permanent collapse to ~0 for the rest of the run, in both the v3 and v4
+experiments independently. Hence the cosine-decayed LR and ``max_grad_norm`` clipping below,
+and ``best.pt`` checkpoint selection as a safety net in case collapse still happens.
+
+⚠️ **Update: a single global-norm clip does not protect ``heads`` from that hazard.**
+Re-running v3 against the fix above (2026-08-12) showed collapse merely delayed (step
+700 -> 900) and shallower (peak ``cosine_similarity`` 0.025 -> 0.084), not eliminated.
+Root cause: ``clip_grad_norm_(hypernet.parameters(), max_grad_norm)`` computes one norm
+across the *whole* ~158M-parameter hypernetwork; the ``heads`` group (``bottleneck``/
+``out_A``/``out_B`` -- the exact pathway with the dead-gradient fixed point) is a tiny
+fraction of that, so a locally huge update to ``heads`` can leave the *global* norm well
+under the clip threshold while still knocking ``out_B`` back toward zero. Fixed by clipping
+``heads`` separately, at a much tighter norm (``max_grad_norm_heads``), and by giving
+``heads``/``backbone_lora`` their own (lower) learning rates via ``lr_heads``/
+``lr_backbone_lora`` instead of one flat ``lr`` for every group -- see
+``build_param_groups`` below. (A fourth candidate fix, initializing ``out_B`` near-zero
+instead of exactly zero to remove the literal fixed point, was **not** applied: it would
+give ``backbone_lora``/``queries``/``refiner``/``shared_decoder`` a nonzero gradient at
+step 0, breaking ``tests/test_grad_flow.py::test_step_zero_upstream_is_idle``'s
+intentionally-guarded "only ``out_B`` moves first" contract -- see that test's docstring.)
 """
 
 from __future__ import annotations
 
+import math
 import random
 from collections.abc import Iterator
 from dataclasses import asdict, dataclass
@@ -40,9 +70,13 @@ from steerable_t2l.target_spec import TargetSpec
 
 @dataclass
 class ReconConfig:
-    lr: float = 5e-4
+    lr: float = 2e-4
+    lr_backbone_lora: float = 5e-5
+    lr_heads: float = 5e-5
     max_steps: int = 2000
     warmup_frac: float = 0.03
+    max_grad_norm: float = 1.0
+    max_grad_norm_heads: float = 0.1
     batch_size: int = 64
     val_freq: int = 100
     seed: int = 0
@@ -186,6 +220,21 @@ def evaluate_recon(
     }
 
 
+def build_param_groups(hypernet: SteerableHyperLoRA, config: ReconConfig) -> list[dict]:
+    """``backbone_lora`` and ``heads`` each get their own (lower) learning rate; ``queries``/
+    ``refiner``/``shared_decoder`` share the base ``lr`` -- see the module docstring's
+    "global-norm clip does not protect heads" update for why ``heads`` in particular needs a
+    gentler rate, not just a tighter clip.
+    """
+    groups = hypernet.parameter_groups()
+    rest = [p for name in ("queries", "refiner", "shared_decoder") for p in groups[name]]
+    return [
+        {"params": groups["backbone_lora"], "lr": config.lr_backbone_lora, "name": "backbone_lora"},
+        {"params": groups["heads"], "lr": config.lr_heads, "name": "heads"},
+        {"params": rest, "lr": config.lr, "name": "rest"},
+    ]
+
+
 def train_recon(
     config: ReconConfig,
     hypernet: SteerableHyperLoRA,
@@ -201,15 +250,28 @@ def train_recon(
     checkpoint's config (not as module buffers -- see the module docstring)."""
     rng = random.Random(config.seed)
     device = next(hypernet.parameters()).device
-    optimizer = torch.optim.AdamW(hypernet.parameters(), lr=config.lr)
+    groups = hypernet.parameter_groups()
+    heads_params = groups["heads"]
+    rest_params = [p for name in ("backbone_lora", "queries", "refiner", "shared_decoder") for p in groups[name]]
+    optimizer = torch.optim.AdamW(build_param_groups(hypernet, config))
     warmup_steps = max(1, int(config.max_steps * config.warmup_frac))
-    scheduler = torch.optim.lr_scheduler.LambdaLR(
-        optimizer, lr_lambda=lambda step: min(1.0, (step + 1) / warmup_steps)
-    )
+
+    def lr_lambda(step: int) -> float:
+        # Warmup, then cosine decay to 0 by max_steps -- NOT flat after warmup. A flat 5e-4 LR
+        # for the remainder of the run is what let one late large step knock out_B back to ~0,
+        # re-triggering the dead-gradient fixed point _apply_zero_init warns about (see module
+        # docstring). Decaying keeps late steps small enough not to re-cross that point.
+        if step < warmup_steps:
+            return (step + 1) / warmup_steps
+        progress = (step - warmup_steps) / max(1, config.max_steps - warmup_steps)
+        return 0.5 * (1.0 + math.cos(math.pi * min(progress, 1.0)))
+
+    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda)
 
     batches = build_recon_batches(tasks, oracle_dir, spec, config.batch_size, rng, device=device)
     normalizer_history: dict[str, list[float]] = {}
     history: list[dict] = []
+    best_cosine_similarity: float | None = None
 
     for step in range(config.max_steps):
         batch = next(batches)
@@ -222,6 +284,12 @@ def train_recon(
         loss_dict = recon_loss(per_module_expanded, batch["target_A"], batch["target_B"])
         optimizer.zero_grad(set_to_none=True)
         loss_dict["loss"].backward()
+        # heads gets its own, much tighter clip -- a global clip over the whole ~158M-param
+        # model can leave a locally huge update to heads (the dead-gradient-fixed-point
+        # pathway) well under threshold even while it knocks out_B back toward zero. See the
+        # module docstring's "global-norm clip does not protect heads" update.
+        torch.nn.utils.clip_grad_norm_(heads_params, config.max_grad_norm_heads)
+        torch.nn.utils.clip_grad_norm_(rest_params, config.max_grad_norm)
         optimizer.step()
         scheduler.step()
 
@@ -246,4 +314,24 @@ def train_recon(
                     extra={"recon_config": config.to_dict(), "history": history},
                 )
 
-    return {"history": history}
+                # Separate best-by-cosine_similarity checkpoint: recon can still collapse late
+                # (cosine_similarity -> ~0) despite the stability fixes above, and latest.pt
+                # alone would silently hand that collapsed state to SFT warm-start. cosine_
+                # similarity (not normalized_l1) is the selection metric because L1 loss can
+                # look deceptively low even at ~0 similarity -- it locks onto the "predict the
+                # mean" baseline value, which is itself small (see module docstring).
+                cos_sim = metrics.get("cosine_similarity")
+                if isinstance(cos_sim, (int, float)) and (
+                    best_cosine_similarity is None or cos_sim > best_cosine_similarity
+                ):
+                    best_cosine_similarity = cos_sim
+                    save_checkpoint(
+                        Path(out_dir) / "best.pt", hypernet, hypernet.config, spec,
+                        stage="recon", step=step + 1,
+                        extra={
+                            "recon_config": config.to_dict(), "history": history,
+                            "best_step": step + 1, "best_cosine_similarity": cos_sim,
+                        },
+                    )
+
+    return {"history": history, "best_cosine_similarity": best_cosine_similarity}

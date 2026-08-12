@@ -134,7 +134,7 @@ if [[ $FULL -eq 1 ]]; then
         --hypernet-config configs/hypernet.yaml --target-dir "$TARGET_DIR" \
         --tasks-root "$TASKS_OUT" --train-tasks "${TRAIN_TASKS_ARR[@]}" --splits data/splits_v4.json \
         --data-config configs/data_v4.yaml --oracle-dir outputs/oracle_loras_v4 \
-        --init-from outputs/checkpoints/recon_v4/latest.pt --out outputs/checkpoints/sft_warmstart_v4
+        --init-from outputs/checkpoints/recon_v4/best.pt --out outputs/checkpoints/sft_warmstart_v4
 
     echo
     echo "--- ablation report"

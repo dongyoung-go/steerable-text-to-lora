@@ -21,8 +21,24 @@ REPO_PARENT_DIR="$(dirname -- "${SELF_CORRECT_GRPO_DIR}")"
 : "${PILOT_NUM_ROLLOUT:=300}"
 : "${PILOT_ROLLOUT_BATCH_SIZE:=16}"
 : "${PILOT_N_SAMPLES_PER_PROMPT:=8}"
+: "${MEGATRON_LM_DIR:=/root/Megatron-LM}"
+
+# See run_pilot_gated.sh for why this is needed: system CUDA install conflicts can shadow torch's
+# bundled cudart in SGLang-spawned subprocesses, crashing on `import torch`.
+_TORCH_LIB_DIR="$(python3 -c 'import torch, os; print(os.path.join(os.path.dirname(torch.__file__), "lib"))')"
+_CUDART_LIB_DIR="$(python3 -c 'import nvidia.cuda_runtime, os; print(os.path.join(list(nvidia.cuda_runtime.__path__)[0], "lib"))')"
+export LD_LIBRARY_PATH="${_TORCH_LIB_DIR}:${_CUDART_LIB_DIR}:${LD_LIBRARY_PATH:-}"
+
+# See run_pilot_gated.sh for why PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True is deliberately
+# NOT set here -- it breaks the actor<->rollout weight-sync IPC (pidfd_getfd failure) despite being
+# PyTorch's own suggested fragmentation-OOM fix. sglang_mem_fraction_static=0.4 is used instead.
 
 export PYTHONPATH="${ICRL_DIR}:${REPO_PARENT_DIR}:${PYTHONPATH:-}"
+
+# See run_pilot_gated.sh for why this is needed: --colocate's default --offload-train/-rollout
+# crash/hang natively (torch_memory_saver pause()/resume()) on this node; both disabled via the
+# --no-offload-train/--no-offload-rollout negation flags, rendered by naming the hydra keys
+# no_offload_train/no_offload_rollout (render_cli_args can't emit `false`).
 
 cd "${ICRL_DIR}"
 python3 -m self_correct_grpo.icrl_ungated.hydra_runner \
@@ -36,15 +52,17 @@ python3 -m self_correct_grpo.icrl_ungated.hydra_runner \
   checkpoint.cli.ref_load="${ICRL_MODEL_DIR}/qwen3-4b-inst-2507-torch-dist" \
   rollout.cli.prompt_data="${PILOT_TRAIN_DATA}" \
   rollout.cli.input_key=prompt \
-  rollout.cli.label_key=label \
   rollout.cli.metadata_key=metadata \
-  rollout.cli.apply_chat_template=false \
+  +rollout.cli.apply_chat_template=false \
   rollout.cli.num_rollout="${PILOT_NUM_ROLLOUT}" \
   rollout.cli.rollout_batch_size="${PILOT_ROLLOUT_BATCH_SIZE}" \
   rollout.cli.n_samples_per_prompt="${PILOT_N_SAMPLES_PER_PROMPT}" \
   eval.cli.eval_prompt_data="[math,${PILOT_EVAL_DATA}]" \
-  eval.cli.eval_input_key=prompt \
-  eval.cli.eval_label_key=label \
   sglang.cli.rollout_num_gpus_per_engine=1 \
-  "gpu.ray_job.runtime_env.env_vars.PYTHONPATH=/root/Megatron-LM/:${ICRL_DIR}:${REPO_PARENT_DIR}" \
+  logging.cli.use_wandb=false \
+  +gpu.resources_cli.no_offload_train=true \
+  +gpu.resources_cli.no_offload_rollout=true \
+  sglang.cli.sglang_mem_fraction_static=0.3 \
+  "gpu.ray_job.runtime_env.env_vars.PYTHONPATH=${MEGATRON_LM_DIR}/:${ICRL_DIR}:${REPO_PARENT_DIR}" \
+  "+gpu.ray_job.runtime_env.env_vars.LD_LIBRARY_PATH=${LD_LIBRARY_PATH}" \
   "$@"

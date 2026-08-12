@@ -163,12 +163,13 @@ def main(args: argparse.Namespace) -> None:
         # or a very early round with a weak base model). Nothing to fine-tune on -- carry
         # the base model forward unchanged rather than crashing the round loop, so Grow can
         # still try again next round (possibly with an updated feedback.txt in Condition B).
-        print(f"[train] no filtered pairs at {args.filtered}; copying base model forward unchanged")
+        print(f"[train] no filtered pairs at {args.filtered}; copying base model forward unchanged", flush=True)
         model = AutoModelForCausalLM.from_pretrained(args.base_model, torch_dtype=torch.bfloat16)
         model.save_pretrained(out_dir)
         tokenizer.save_pretrained(out_dir)
         return
 
+    print(f"[train] n_pairs={len(pairs)}; loading base model {args.base_model}...", flush=True)
     model = AutoModelForCausalLM.from_pretrained(
         args.base_model, torch_dtype=torch.bfloat16, attn_implementation="sdpa",
     ).to("cuda")
@@ -184,10 +185,12 @@ def main(args: argparse.Namespace) -> None:
     peft_model = get_peft_model(model, lora_config)
     peft_model.print_trainable_parameters()
 
+    print(f"[train] model loaded; tokenizing {len(pairs)} train pairs...", flush=True)
     train_loader = DataLoader(
         SFTDataset(args.task, pairs, tokenizer, args.max_len), batch_size=args.batch_size,
         shuffle=True, collate_fn=lambda batch: collate(batch, tokenizer.pad_token_id),
     )
+    print(f"[train] train dataset built ({len(train_loader)} batches/epoch)", flush=True)
     val_pairs = load_filtered_pairs(Path(args.dev_filtered)) if args.dev_filtered and Path(args.dev_filtered).exists() else []
     val_loader = None
     if val_pairs:
@@ -195,9 +198,10 @@ def main(args: argparse.Namespace) -> None:
             SFTDataset(args.task, val_pairs, tokenizer, args.max_len), batch_size=args.batch_size,
             shuffle=False, collate_fn=lambda batch: collate(batch, tokenizer.pad_token_id),
         )
+        print(f"[train] dev dataset built ({len(val_loader)} batches)", flush=True)
     else:
         print(f"[train] no dev pairs at {args.dev_filtered!r}; "
-              f"training to the --epochs={args.epochs} cap with no early stopping")
+              f"training to the --epochs={args.epochs} cap with no early stopping", flush=True)
 
     optimizer = torch.optim.AdamW(
         (p for p in peft_model.parameters() if p.requires_grad), lr=args.lr,
@@ -226,16 +230,16 @@ def main(args: argparse.Namespace) -> None:
             optimizer.zero_grad(set_to_none=True)
             step += 1
             if step % 10 == 0 or step == total_steps:
-                print(f"[train] epoch={epoch} step={step}/{total_steps} loss={loss.item():.4f}")
+                print(f"[train] epoch={epoch} step={step}/{total_steps} loss={loss.item():.4f}", flush=True)
 
         if val_loader is not None:
             val_loss = eval_loss(peft_model, val_loader, tokenizer.pad_token_id)
-            print(f"[train] epoch={epoch} val_loss={val_loss:.4f}")
+            print(f"[train] epoch={epoch} val_loss={val_loss:.4f}", flush=True)
             if val_loss < best_val:
                 best_val = val_loss
                 best_state = {k: v.detach().clone() for k, v in get_peft_model_state_dict(peft_model).items()}
             if stopper.step(val_loss):
-                print(f"[train] early stopping after epoch={epoch} (best val_loss={best_val:.4f})")
+                print(f"[train] early stopping after epoch={epoch} (best val_loss={best_val:.4f})", flush=True)
                 break
 
     if best_state is not None:
@@ -245,7 +249,7 @@ def main(args: argparse.Namespace) -> None:
     merged = peft_model.merge_and_unload()
     merged.save_pretrained(out_dir, safe_serialization=True)
     tokenizer.save_pretrained(out_dir)
-    print(f"[train] n_pairs={len(pairs)} (dev val={len(val_pairs)}) saved merged checkpoint to {out_dir}")
+    print(f"[train] n_pairs={len(pairs)} (dev val={len(val_pairs)}) saved merged checkpoint to {out_dir}", flush=True)
 
 
 def build_argparser() -> argparse.ArgumentParser:

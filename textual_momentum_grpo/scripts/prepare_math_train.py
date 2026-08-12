@@ -1,12 +1,17 @@
 """Prepare the MATH training split (README section 5: "MATH (training split...)").
 
 Per a confirmed data-scope decision, this project trains on the actual MATH training split
-(`hendrycks/competition_math` on Hugging Face -- the canonical Hendrycks et al. 2021 dataset,
-7,500 train / 5,000 test problems), NOT `self_correct_grpo`'s vendored `dapo-math-17k.jsonl`,
-which is a different curated training pool used by that (separate) project.
+(the canonical Hendrycks et al. 2021 dataset, 7,500 train / 5,000 test problems across 7 subject
+areas), NOT `self_correct_grpo`'s vendored `dapo-math-17k.jsonl`, which is a different curated
+training pool used by that (separate) project.
 
-`hendrycks/competition_math` is a gated dataset: you must accept its terms on the Hub and have
-`huggingface-cli login` (or `HF_TOKEN` set) before this script can download it.
+The original `hendrycks/competition_math` repo on the Hugging Face Hub is disabled (403 on every
+file, not merely gated -- confirmed 2026-08-11), so this pulls from `EleutherAI/hendrycks_math`
+instead: a parquet re-upload of the identical dataset (same `problem`/`solution`/`level`/`type`
+schema), split into 7 per-subject configs (algebra, counting_and_probability, geometry,
+intermediate_algebra, number_theory, prealgebra, precalculus) each with a `train`/`test` split.
+This mirror is widely used elsewhere (e.g. EleutherAI's own lm-evaluation-harness) and needs no
+`trust_remote_code` / gating -- it loads as plain parquet.
 
 Output schema matches the vendored eval files this project reuses (see prepare_eval_data.py):
     {"prompt": [{"role": "user", "content": <problem text>}], "label": <boxed answer>}
@@ -52,14 +57,27 @@ def _extract_boxed_answer(solution: str) -> str | None:
     return "".join(chars)
 
 
+_SUBJECTS = [
+    "algebra",
+    "counting_and_probability",
+    "geometry",
+    "intermediate_algebra",
+    "number_theory",
+    "prealgebra",
+    "precalculus",
+]
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument(
         "--hf-dataset",
-        default="hendrycks/competition_math",
-        help="Hugging Face dataset id for the MATH training split.",
+        default="EleutherAI/hendrycks_math",
+        help="Hugging Face dataset id for the MATH training split (parquet mirror; the original "
+        "hendrycks/competition_math repo is disabled on the Hub).",
     )
+    parser.add_argument("--split", default="train", help="Split name within each subject config.")
     args = parser.parse_args()
 
     try:
@@ -72,23 +90,25 @@ def main() -> int:
         )
         return 1
 
-    try:
-        ds = datasets.load_dataset(args.hf_dataset, split="train")
-    except Exception as exc:  # dataset is gated -- surface the auth requirement clearly
-        print(
-            f"error: failed to load {args.hf_dataset!r} ({exc}).\n"
-            "This dataset is gated on the Hugging Face Hub: accept its terms at "
-            f"https://huggingface.co/datasets/{args.hf_dataset} and run `huggingface-cli login` "
-            "(or set HF_TOKEN) before retrying.",
-            file=sys.stderr,
-        )
-        return 1
+    rows = []
+    for subject in _SUBJECTS:
+        try:
+            ds = datasets.load_dataset(args.hf_dataset, subject, split=args.split)
+        except Exception as exc:
+            print(
+                f"error: failed to load {args.hf_dataset!r} config {subject!r} ({exc}).\n"
+                "If this is a gating/auth error, accept the dataset's terms on the Hub and run "
+                "`huggingface-cli login` (or set HF_TOKEN) before retrying.",
+                file=sys.stderr,
+            )
+            return 1
+        rows.extend(ds)
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
     n_written = 0
     n_skipped_no_answer = 0
     with args.out.open("w") as f:
-        for row in ds:
+        for row in rows:
             problem = row["problem"]
             solution = row["solution"]
             answer = _extract_boxed_answer(solution)
