@@ -128,6 +128,61 @@ def test_missing_source_errors(tmp_path):
     assert not (out_oracle / "textgrad_repro_v5_aqua_d0").exists()
 
 
+def test_splits_t_holdout_tasks_are_skipped_not_missing(tmp_path):
+    tasks_root = tmp_path / "tasks"
+    tasks_root.mkdir()
+    _write_task(tasks_root, "textgrad_repro_v5_aqua_d0")
+    _write_task(tasks_root, "textgrad_repro_v5_aqua_d1")
+
+    source_oracle = tmp_path / "oracle_loras_v3"
+    source_canon = tmp_path / "oracle_loras_canon_v3"
+    _write_oracle(source_oracle, "textgrad_repro_v3_aqua_d0")
+    _write_canon(source_canon, "textgrad_repro_v3_aqua_d0")
+    # No source oracle/canon for textgrad_repro_v3_aqua_d1 -- it's a T-holdout task, so
+    # train_oracle_loras.py never trained one for it; that's expected, not an error.
+
+    splits_path = tmp_path / "splits_v5.json"
+    splits_path.write_text(
+        json.dumps(
+            {
+                "q_frac": 0.1,
+                "d_holdout": {},
+                "t_holdout": ["textgrad_repro_v5_aqua_d1"],
+                "seed": 0,
+            }
+        )
+    )
+
+    out_oracle = tmp_path / "oracle_loras_v5"
+    out_canon = tmp_path / "oracle_loras_canon_v5"
+
+    args = [
+        "--tasks-root", str(tasks_root),
+        "--train-tasks", "textgrad_repro_v5_*",
+        "--splits", str(splits_path),
+        "--source-oracle-dir", str(source_oracle),
+        "--source-canon-dir", str(source_canon),
+        "--out-oracle-dir", str(out_oracle),
+        "--out-canon-dir", str(out_canon),
+        "--from-substr", "_v5_",
+        "--to-substr", "_v3_",
+    ]
+    import contextlib
+    import io
+
+    old_argv = sys.argv
+    sys.argv = ["reuse_oracle_loras.py", *args]
+    try:
+        with contextlib.redirect_stdout(io.StringIO()):
+            rc = main()
+    finally:
+        sys.argv = old_argv
+
+    assert rc == 0
+    assert (out_oracle / "textgrad_repro_v5_aqua_d0").is_symlink()
+    assert not (out_oracle / "textgrad_repro_v5_aqua_d1").exists()
+
+
 def test_refuses_to_clobber_real_directory(tmp_path):
     tasks_root = tmp_path / "tasks"
     tasks_root.mkdir()

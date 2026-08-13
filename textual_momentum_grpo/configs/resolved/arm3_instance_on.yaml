@@ -2,7 +2,7 @@ algorithm:
   adv_estimator: grpo
   use_kl_in_reward: false
 data:
-  train_files: data/train.parquet
+  train_files: data/train_openr1.parquet
   val_files: data/eval/math500.parquet
   train_batch_size: 16
   max_prompt_length: 1024
@@ -44,7 +44,7 @@ trainer:
 custom:
   frontier_model: gpt-5-mini
   calibration_w_max: 5.0
-  reward_data_source: math
+  reward_data_source: openr1_math
   conditioning: critique
   internalization: true
   calibration: true

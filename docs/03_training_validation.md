@@ -434,14 +434,26 @@ moves first" contract (that test's own docstring says "Do not relax it"). The ex
 step-0 lag is a deliberate design choice, not an oversight, so this fix was dropped rather than
 relaxing it.
 
-**Not yet re-verified experimentally** — this second round of fixes has not yet been run against
-`recon_v3`/`recon_v5`. The `v5` experiment (`docs/06_description_augmentation_v5.md`,
-`run_all_v5.sh`) — which gives every task dir up to 8 description paraphrases instead of v3's
-exactly 1 — is the natural next real run: it attacks the *data* side of the collapse (recon has
-no phrasing-invariant signal to learn from with 1 description/task) independently of this
-session's *optimizer*-side fixes, and reuses v3's oracle LoRAs (no retraining needed there, per
-docs/06). Running `v3` once more against just this round's fixes (isolated from the `v5` data
-change) first, then `v5` with the same fixed trainer, would separate the two effects.
+**Re-verified experimentally (2026-08-12, standalone recon-only re-run against `recon_v3`)** —
+ran just the recon stage in isolation (`scripts/train_recon.py` against `configs/recon.yaml`,
+`--force`, writing over the first-round-fix checkpoint at `outputs/checkpoints/recon_v3`) to check
+the second-round fix cheaply before committing to full SFT + downstream eval. Result: **collapse
+eliminated**, not just delayed. `cosine_similarity` rose monotonically for the full 2000 steps
+(0.0000 @ step 100 → 0.128 @ step 2000, `train_loss` 1.004 → 0.950 with no spikes), well past the
+first round's peak of 0.084 @ step 800 before its step-900 collapse. `best.pt` and `latest.pt`
+coincide at cosine_similarity 0.1280 (the run never regressed from its own running best, so the
+"prefer best.pt in case of late collapse" safety net was never triggered). The curve was **still
+rising** at step 2000 (last few deltas: 0.1249 → 0.1267 → 0.1278 → 0.1280, shallowing but still
+positive) — `max_steps: 2000` is very likely leaving gains on the table rather than having
+converged; see the `v5` recon `max_steps` recommendation in `docs/06_description_augmentation_v5.md`.
+
+This validates the optimizer-side fix in isolation, ahead of the `v5` experiment
+(`docs/06_description_augmentation_v5.md`, `run_all_v5.sh`) — which gives every task dir up to 8
+description paraphrases instead of v3's exactly 1 and attacks the *data* side of the collapse
+(recon has no phrasing-invariant signal to learn from with 1 description/task) independently of
+this session's *optimizer*-side fixes, reusing v3's oracle LoRAs (no retraining needed there, per
+docs/06). With both `v3` (optimizer fix, isolated) and `v5` (data fix, on top of the same fixed
+trainer) now separable, `v5`'s recon run is the natural next step.
 
 ---
 

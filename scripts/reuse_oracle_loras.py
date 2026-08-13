@@ -14,9 +14,15 @@ Not hardcoded to v3->v5: ``--from-substr``/``--to-substr`` do a plain string sub
 discovered task's name to find its source name, so any two namespaces sharing this "same data,
 renamed" relationship can reuse this script.
 
+``--splits`` is optional but should be passed the new namespace's ``splits.json`` whenever one
+exists: ``train_oracle_loras.py`` never trains an oracle for a ``t_holdout`` task (see its own
+``tasks = [t for t in tasks if t.name not in splits.t_holdout]``), so those tasks have no source
+oracle to reuse by construction, not by omission. Without ``--splits`` this script has no way to
+tell "held out on purpose" apart from "actually missing" and fails loudly on both.
+
     python scripts/reuse_oracle_loras.py \
         --tasks-root /home/dg793/text-to-lora/tasks \
-        --train-tasks textgrad_repro_v5_* gepa_repro_v5_* \
+        --train-tasks textgrad_repro_v5_* gepa_repro_v5_* --splits data/splits_v5.json \
         --source-oracle-dir outputs/oracle_loras_v3 --source-canon-dir outputs/oracle_loras_canon_v3 \
         --out-oracle-dir outputs/oracle_loras_v5 --out-canon-dir outputs/oracle_loras_canon_v5 \
         --from-substr _v5_ --to-substr _v3_
@@ -25,10 +31,12 @@ renamed" relationship can reuse this script.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 from pathlib import Path
 
 from steerable_t2l.data.registry import discover_tasks
+from steerable_t2l.data.splits import Splits
 
 
 def _relink(link_path: Path, target: Path, *, force: bool, is_dir: bool) -> None:
@@ -57,12 +65,24 @@ def main() -> int:
     ap.add_argument("--from-substr", required=True, help="substring in the new namespace's task names, e.g. _v5_")
     ap.add_argument("--to-substr", required=True, help="replacement substring giving the source task name, e.g. _v3_")
     ap.add_argument("--force", action="store_true", help="relink even if a symlink already exists at the destination")
+    ap.add_argument(
+        "--splits",
+        help="splits.json from scripts/make_splits.py -- tasks in its t_holdout are skipped, "
+        "matching train_oracle_loras.py's own filtering (T-holdout tasks never get an oracle "
+        "trained, so they never have a source to reuse)",
+    )
     args = ap.parse_args()
 
     tasks = discover_tasks(args.tasks_root, args.train_tasks)
     if not tasks:
         print("no tasks matched --train-tasks")
         return 1
+
+    if args.splits:
+        with open(args.splits) as f:
+            splits = Splits.from_dict(json.load(f))
+        t_holdout = set(splits.t_holdout)
+        tasks = [t for t in tasks if t.name not in t_holdout]
 
     source_oracle_dir = Path(args.source_oracle_dir)
     source_canon_dir = Path(args.source_canon_dir)

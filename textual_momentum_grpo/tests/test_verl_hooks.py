@@ -1,6 +1,4 @@
-import pytest
-
-from tmgrpo.verl_hooks import compute_score, inject_conditioning_context, recompute_unconditioned_logprobs
+from tmgrpo.verl_hooks import compute_score, inject_conditioning_context, truncate_head_tail
 
 
 def test_compute_score_matches_verl_contract_signature():
@@ -22,6 +20,20 @@ def test_inject_conditioning_context_no_op_on_empty_context():
     assert inject_conditioning_context(prompt, "") == prompt
 
 
-def test_recompute_unconditioned_logprobs_not_yet_implemented():
-    with pytest.raises(NotImplementedError):
-        recompute_unconditioned_logprobs()
+def test_truncate_head_tail_no_op_under_budget():
+    assert truncate_head_tail("short text", head=600, tail=600) == "short text"
+
+
+def test_truncate_head_tail_keeps_both_ends():
+    text = "A" * 1000 + "MIDDLE" + "B" * 1000 + "\\boxed{42}"
+    result = truncate_head_tail(text, head=600, tail=600)
+    assert result.startswith("A" * 600)
+    assert result.endswith("\\boxed{42}")
+    assert "MIDDLE" not in result
+    assert "…[truncated]…" in result
+
+
+def test_truncate_head_tail_head_only_when_tail_zero():
+    text = "A" * 1000
+    result = truncate_head_tail(text, head=450, tail=0)
+    assert result == "A" * 450 + " …[truncated]"

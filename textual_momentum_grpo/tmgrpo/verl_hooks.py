@@ -8,12 +8,9 @@ Wired in per-arm via `custom_reward_function.path=tmgrpo/verl_hooks.py` and (imp
 `custom_reward_function.name=compute_score`.
 
 This module is the seam between the pure-Python, CPU-testable tmgrpo/ package and verl's actual
-training loop -- it is the one place expected to need adjustment once verl is actually installed
-and its Python API can be inspected directly (see configs/base.yaml's header comment and
-docs/build_and_run_guide.md for this flagged risk). The pieces that need genuine verl-internals
-knowledge -- injecting momentum/critique text into the rollout prompt but recomputing log-probs
-under the unconditioned prompt for the gradient (README section 3, arms 3/5) -- are stubbed here
-with a clear NotImplementedError rather than a guessed, untested implementation.
+training loop. Recomputing log-probs under the unconditioned prompt (README section 3 steps 2-3,
+arms 3/5) needs live access to the trainer's tokenizer/actor-worker-group/`_compute_old_log_prob`,
+so that logic lives on `tmgrpo.verl_trainer.TMGrpoTrainer` instead of as a standalone function here.
 """
 
 from __future__ import annotations
@@ -37,6 +34,22 @@ def compute_score(
     return 1.0 if check_answer(solution_str, ground_truth) else 0.0
 
 
+def truncate_head_tail(text: str, head: int, tail: int = 0) -> str:
+    """Truncate `text` to at most `head + tail` characters, keeping both ends.
+
+    Used by `tmgrpo.verl_trainer.TMGrpoTrainer._build_step_summary` (README section 3 step 4's
+    input): a plain head-only cut on a math solution tends to drop the final boxed answer, which
+    is usually the most diagnostic part of the response for the frontier model's textual-gradient
+    call. Keeping a tail preserves that even when the middle "working" gets cut. `tail=0` degrades
+    to a plain head truncation, used for the (short, no informative tail) problem statement.
+    """
+    if len(text) <= head + tail:
+        return text
+    if tail == 0:
+        return text[:head] + " …[truncated]"
+    return text[:head] + " …[truncated]… " + text[len(text) - tail :]
+
+
 def inject_conditioning_context(prompt: list[dict], context: str) -> list[dict]:
     """Arms 2-5: append a critique or momentum directive to the prompt before rollout sampling.
 
@@ -48,22 +61,3 @@ def inject_conditioning_context(prompt: list[dict], context: str) -> list[dict]:
     if not context:
         return prompt
     return [*prompt, {"role": "user", "content": f"Guidance for this attempt:\n{context}"}]
-
-
-def recompute_unconditioned_logprobs(*args, **kwargs):
-    """Arms 3/5 internalization (README section 3, step 2): recompute each response's log-probs
-    under the prompt WITHOUT the conditioning context appended by `inject_conditioning_context`,
-    for use as the internalized gradient target and as the numerator of the calibration ratio
-    w_t (tmgrpo/calibration.py).
-
-    Not implemented here: this requires a second forward pass through verl's actor (or reference)
-    worker with a different prompt than the one used for sampling, which depends on verl's actual
-    worker/DataProto API. That API could not be verified in the GPU-less build sandbox (see
-    configs/base.yaml's header comment). Implement this against verl's real
-    `actor_rollout_ref.actor.compute_log_prob` (or equivalent) once installed on the GPU node --
-    do not guess at the call shape here.
-    """
-    raise NotImplementedError(
-        "wire this against verl's actual log-prob-recomputation API once verl is installed on "
-        "the GPU node -- see this function's docstring and configs/base.yaml's header comment."
-    )

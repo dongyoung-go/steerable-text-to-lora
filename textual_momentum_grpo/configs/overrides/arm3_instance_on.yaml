@@ -8,7 +8,7 @@ reward:                      # main_ppo's actual reward-manager path reads confi
     path: tmgrpo/verl_hooks.py
     name: compute_score
 custom:
-  reward_data_source: math
+  reward_data_source: openr1_math  # matches data.train_files default (configs/base.yaml) -- set to 'math' if overriding to the MATH pool
   conditioning: critique
   internalization: true       # tmgrpo/verl_hooks.py recompute_unconditioned_logprobs() -- NOT YET IMPLEMENTED, see that function's docstring
   calibration: true           # tmgrpo/calibration.py apply_calibration()

@@ -25,3 +25,4 @@ textual_momentum_grpo/.build-tmp/
 textual_momentum_grpo/.conda-nvcc128/
 textual_momentum_grpo/.cuda128-home/
 textual_momentum_grpo/models/
+textual_momentum_grpo/checkpoints/

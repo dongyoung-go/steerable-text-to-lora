@@ -47,7 +47,27 @@ REPO_PARENT_DIR="$(dirname -- "${SELF_CORRECT_GRPO_DIR}")"
 # never prepared for this pilot and doesn't exist).
 : "${PILOT_TRAIN_DATA:=${SELF_CORRECT_GRPO_DIR}/data/math_pilot/train.jsonl}"
 : "${PILOT_EVAL_DATA:=${SELF_CORRECT_GRPO_DIR}/data/math_pilot/eval.jsonl}"
-: "${MEGATRON_LM_DIR:=/root/Megatron-LM}"
+# Auto-detect rather than requiring the caller to export this every session -- see
+# run_pilot_gated.sh's matching comment.
+if [[ -z "${MEGATRON_LM_DIR:-}" ]]; then
+  if [[ -d /root/Megatron-LM ]]; then
+    MEGATRON_LM_DIR=/root/Megatron-LM
+  else
+    MEGATRON_LM_DIR="${HOME}/icrl_pilot_build/Megatron-LM"
+  fi
+fi
+# Same validated offload + mem_fraction=0.7 config as run_pilot_gated.sh -- see that script's
+# comment. Not load-bearing for correctness here (eval-only never hits the checkpoint-save path),
+# but keeping it consistent avoids re-deriving a separate memory profile for eval runs.
+: "${PILOT_OFFLOAD:=true}"
+: "${PILOT_SGLANG_MEM_FRACTION_STATIC:=0.7}"
+if [[ "${PILOT_OFFLOAD}" == "true" ]]; then
+  PILOT_NO_OFFLOAD_TRAIN=false
+  PILOT_NO_OFFLOAD_ROLLOUT=false
+else
+  PILOT_NO_OFFLOAD_TRAIN=true
+  PILOT_NO_OFFLOAD_ROLLOUT=true
+fi
 
 # See run_pilot_gated.sh for why this is needed: system CUDA install conflicts can shadow torch's
 # bundled cudart in SGLang-spawned subprocesses, crashing on `import torch`.
@@ -56,6 +76,10 @@ _CUDART_LIB_DIR="$(python3 -c 'import nvidia.cuda_runtime, os; print(os.path.joi
 export LD_LIBRARY_PATH="${_TORCH_LIB_DIR}:${_CUDART_LIB_DIR}:${LD_LIBRARY_PATH:-}"
 
 export PYTHONPATH="${ICRL_DIR}:${REPO_PARENT_DIR}:${PYTHONPATH:-}"
+
+# See run_pilot_gated.sh's matching comment: force-stop any stale ray head left over from a
+# crashed prior job, before this script's own `ray start --head` runs.
+ray stop --force >/dev/null 2>&1 || true
 
 if [[ "${ARM}" == "gated" ]]; then
   RUNNER_MODULE="icrl.hydra_runner"
@@ -84,9 +108,9 @@ python3 -m "${RUNNER_MODULE}" \
   eval.cli.eval_prompt_data="[math,${PILOT_EVAL_DATA}]" \
   sglang.cli.rollout_num_gpus_per_engine=1 \
   logging.cli.use_wandb=false \
-  +gpu.resources_cli.no_offload_train=true \
-  +gpu.resources_cli.no_offload_rollout=true \
-  sglang.cli.sglang_mem_fraction_static=0.3 \
+  +gpu.resources_cli.no_offload_train="${PILOT_NO_OFFLOAD_TRAIN}" \
+  +gpu.resources_cli.no_offload_rollout="${PILOT_NO_OFFLOAD_ROLLOUT}" \
+  sglang.cli.sglang_mem_fraction_static="${PILOT_SGLANG_MEM_FRACTION_STATIC}" \
   "gpu.ray_job.runtime_env.env_vars.PYTHONPATH=${MEGATRON_LM_DIR}/:${ICRL_DIR}:${REPO_PARENT_DIR}" \
   "+gpu.ray_job.runtime_env.env_vars.LD_LIBRARY_PATH=${LD_LIBRARY_PATH}" \
   "${@:2}"

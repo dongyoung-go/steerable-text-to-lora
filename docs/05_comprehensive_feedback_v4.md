@@ -234,3 +234,43 @@ text assigned to them); the genuinely gradient-free baseline responses only exis
   `..._full_v4.json` against the existing v3 eval outputs to see whether feedback-as-input changes
   downstream accuracy vs. prompt-as-input, and confirm `data/textgrad_repro/`, `outputs/*_v3*`,
   and `data/splits_v3.json` are byte-identical before/after (v3 untouched).
+
+## Results: first real `--full` run (2026-08-13, B200)
+
+`bash run_all_v4.sh --full` completed end-to-end with no errors (lint, full pytest suite, then the
+whole GPU pipeline: feedback generation -> task build -> oracle LoRAs -> recon warm-start -> SFT
+scratch -> downstream eval) across all 86 `comprehensive_feedback_v4_*` task groups. Outputs:
+`outputs/eval/downstream_accuracy_scratch_v4.json` (Q-holdout) and
+`outputs/eval/downstream_accuracy_full_scratch_v4.json` (full official test sets).
+
+Macro-averaged accuracy, compared against the equivalent v3 (scratch) eval outputs:
+
+| condition | v4 Q-holdout | v4 full test | v3 Q-holdout (scratch) | v3 full (scratch) |
+|---|---|---|---|---|
+| base | 0.349 | 0.342 | 0.328 | 0.309 |
+| prompted | 0.333 | 0.321 | 0.440 | 0.416 |
+| t2l_train_desc | **0.579** | **0.551** | 0.543 | 0.484 |
+| t2l_other_task_desc | 0.422 | 0.415 | 0.435 | 0.414 |
+| t2l_gibberish_desc | 0.502 | 0.477 | 0.458 | 0.389 |
+| oracle | 0.599 | 0.564 | 0.593 | 0.579 |
+
+Takeaways:
+
+- **`t2l_train_desc` improves over v3 on both eval splits** (0.579 vs. 0.543 Q-holdout; 0.551 vs.
+  0.484 full test) and closes most of the gap to `oracle` (~97% of oracle in v4 vs. ~92% in v3) --
+  conditioning the hypernetwork on comprehensive feedback is at least as good a T2L input as the
+  literal optimized prompt, and slightly better here.
+- **`prompted` collapses in v4** (0.333/0.321, below even `base`), as anticipated in the "Design
+  notes" section above: comprehensive feedback is generalized guidance text, not an instruction,
+  and it carries no explicit answer-format information the way v3's optimized prompt does -- so
+  injecting it verbatim as a system-turn instruction (no LoRA) actively hurts rather than helps.
+  This is consistent with, and further confirms, the earlier recommendation to leave the
+  no-base-prompt design as-is: the format-learning mechanism (SFT imitation on `response` text) is
+  doing the real work, not the description text at inference time.
+- **`t2l_gibberish_desc` (control) is somewhat higher in v4 than v3** (0.502 vs. 0.458
+  Q-holdout), narrowing the train-vs-gibberish margin a bit, though `t2l_train_desc` still clears
+  it by a comfortable margin on both splits.
+- **`oracle` is essentially unchanged** between v3 and v4 (~0.59-0.60 Q-holdout, ~0.56-0.58 full),
+  as expected: oracle LoRAs are trained per-group directly on the same `(question, response)`
+  pairs regardless of which description text (prompt vs. feedback) is attached, so the LoRA target
+  never changed between v3 and v4.

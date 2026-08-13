@@ -30,7 +30,30 @@ REPO_PARENT_DIR="$(dirname -- "${SELF_CORRECT_GRPO_DIR}")"
 : "${PILOT_SAVE_INTERVAL:=2}"
 # Docker's slimerl/slime:latest image bakes Megatron-LM in at /root/Megatron-LM; the conda-fallback
 # build (setup_icrl_pilot_env.sh) installs it under $BASE_DIR instead (default ~/icrl_pilot_build).
-: "${MEGATRON_LM_DIR:=/root/Megatron-LM}"
+# Auto-detect rather than requiring the caller to export this every session: use the Docker path
+# if it exists, else fall back to the conda-fallback build's default location.
+if [[ -z "${MEGATRON_LM_DIR:-}" ]]; then
+  if [[ -d /root/Megatron-LM ]]; then
+    MEGATRON_LM_DIR=/root/Megatron-LM
+  else
+    MEGATRON_LM_DIR="${HOME}/icrl_pilot_build/Megatron-LM"
+  fi
+fi
+
+# Validated (2026-08-12, 12 stable iterations, no crashes): offload both actor and rollout, and
+# restore ICRL's own published sglang_mem_fraction_static=0.7 (this pilot had been overriding it
+# down to 0.3 defensively before offload was made to work). Override PILOT_OFFLOAD=false to fall
+# back to the no-offload/mem_fraction=0.3 config from earlier pilot sessions if this ever
+# regresses on a different node.
+: "${PILOT_OFFLOAD:=true}"
+: "${PILOT_SGLANG_MEM_FRACTION_STATIC:=0.7}"
+if [[ "${PILOT_OFFLOAD}" == "true" ]]; then
+  PILOT_NO_OFFLOAD_TRAIN=false
+  PILOT_NO_OFFLOAD_ROLLOUT=false
+else
+  PILOT_NO_OFFLOAD_TRAIN=true
+  PILOT_NO_OFFLOAD_ROLLOUT=true
+fi
 
 # This node's system CUDA install (ldconfig-registered alongside an older, stale CUDA-12.0 whose
 # libcudart.so.12 lacks cudaGetDriverEntryPointByVersion) can shadow torch's own bundled cudart in
@@ -42,29 +65,39 @@ _CUDART_LIB_DIR="$(python3 -c 'import nvidia.cuda_runtime, os; print(os.path.joi
 export LD_LIBRARY_PATH="${_TORCH_LIB_DIR}:${_CUDART_LIB_DIR}:${LD_LIBRARY_PATH:-}"
 
 # NOTE: do NOT set PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True here, even though it's
-# PyTorch's own suggested fix for the step-2 fragmentation OOM this pilot hits (both offload paths
-# disabled below means the actor's optimizer state stays GPU-resident, and repeated train
-# iterations fragment the allocator). Tried it -- it broke the actor<->rollout weight-sync IPC
-# instead: expandable segments are backed by cuMemAddressReserve/cuMemMap virtual memory rather
-# than plain cudaMalloc, which torch.multiprocessing's pidfd_getfd-based cross-process tensor
-# rebuild (used by update_weights_from_tensor) can't share, failing with
+# PyTorch's own suggested fix for GPU-fragmentation OOMs. Tried it -- it broke the actor<->rollout
+# weight-sync IPC instead: expandable segments are backed by cuMemAddressReserve/cuMemMap virtual
+# memory rather than plain cudaMalloc, which torch.multiprocessing's pidfd_getfd-based cross-process
+# tensor rebuild (used by update_weights_from_tensor) can't share, failing with
 # "RuntimeError: pidfd_getfd: Operation not permitted" on literally the first weight sync every
-# time. sglang_mem_fraction_static=0.4 below is the fragmentation mitigation instead.
+# time.
 
 export PYTHONPATH="${ICRL_DIR}:${PYTHONPATH:-}"
 
-# --colocate forces --offload-train AND --offload-rollout on by default (frees actor/rollout GPU
-# mem for each other between phases via torch_memory_saver.pause()/resume()), but that native
-# CUDA memory pause/resume is fragile on this node: offload-train's pause() crashed outright
-# (silent worker death, no Python traceback -- see git history), and with that disabled,
-# offload-rollout's resume() instead hung indefinitely after a transient CUDA_ERROR_OUT_OF_MEMORY
-# (its own "may not be an issue, will retry" claim didn't hold -- 5+ min at 0% GPU util, no
-# recovery). The pilot's single B200 has ample headroom for actor + rollout engine to both stay
-# fully resident throughout (~89GB + ~50GB well under 183GB), so disable both offload paths
-# entirely and avoid the pause/resume dance altogether -- render_cli_args can't emit an explicit
-# `false` (it only emits a flag when true), but BooleanOptionalAction auto-registers `--no-X` as
-# each flag's negation, so naming the hydra keys `no_offload_train`/`no_offload_rollout` renders
-# exactly those flags without touching vendored icrl/utils.py's render_cli_args.
+# Offload (actor + rollout both pause/resume via torch_memory_saver, per --colocate's normal
+# behavior) plus sglang_mem_fraction_static=0.7 is PILOT_OFFLOAD's default above -- validated
+# stable for 12 iterations on 2026-08-12 after earlier sessions had disabled offload entirely due
+# to pause()/resume() crashes/hangs on this node with a lower mem_fraction. If offload ever
+# regresses again on a different node, rerun with PILOT_OFFLOAD=false to fall back to fully
+# GPU-resident actor+rollout (needs ample headroom -- ~89GB + ~50GB fit under this pilot's 183GB
+# B200, but leaves no offload safety margin for OOMs elsewhere).
+#
+# recompute_granularity=full / max_tokens_per_gpu=16384 (set in hydra_conf/gpu/train_1gpu.yaml,
+# not overridden here) are load-bearing under the offload+0.7 memory profile above, not overly
+# conservative defaults -- both recompute_granularity=selective and max_tokens_per_gpu=32768 were
+# smoke-tested on 2026-08-12 and both OOM'd at the 2nd post-resume training step. Do not loosen
+# either without re-validating against a resumed run, not just a fresh one (the OOM only shows up
+# after a resume's transient allocator overhead).
+#
+# render_cli_args can't emit an explicit `false` (it only emits a flag when true), but
+# BooleanOptionalAction auto-registers `--no-X` as each flag's negation, so naming the hydra keys
+# `no_offload_train`/`no_offload_rollout` renders exactly those flags without touching vendored
+# icrl/utils.py's render_cli_args.
+
+# A crashed/errored previous ray job can leave a stale ray head bound to port 6379, which blocks
+# a fresh `ray start --head` (icrl.hydra_runner does this itself on launch). Force-stop any
+# leftover cluster before every launch so this never needs to be diagnosed manually.
+ray stop --force >/dev/null 2>&1 || true
 
 # Checkpoint saves ("Storing distributed optimizer sharded state...") OOM-killed the actor process
 # twice on this node -- not the GPU-fragmentation issue described above, but the SLURM allocation's
@@ -100,9 +133,9 @@ python3 -m icrl.hydra_runner \
   eval.cli.eval_prompt_data="[math,${PILOT_EVAL_DATA}]" \
   sglang.cli.rollout_num_gpus_per_engine=1 \
   logging.cli.use_wandb=false \
-  +gpu.resources_cli.no_offload_train=true \
-  +gpu.resources_cli.no_offload_rollout=true \
-  sglang.cli.sglang_mem_fraction_static=0.3 \
+  +gpu.resources_cli.no_offload_train="${PILOT_NO_OFFLOAD_TRAIN}" \
+  +gpu.resources_cli.no_offload_rollout="${PILOT_NO_OFFLOAD_ROLLOUT}" \
+  sglang.cli.sglang_mem_fraction_static="${PILOT_SGLANG_MEM_FRACTION_STATIC}" \
   "gpu.ray_job.runtime_env.env_vars.PYTHONPATH=${MEGATRON_LM_DIR}/:${ICRL_DIR}:${REPO_PARENT_DIR}" \
   "+gpu.ray_job.runtime_env.env_vars.LD_LIBRARY_PATH=${LD_LIBRARY_PATH}" \
   "$@"

@@ -84,7 +84,7 @@ if [[ $FULL -eq 1 ]]; then
     echo
     echo "--- reuse v3's oracle LoRAs under v5 task names (no retraining -- see header)"
     uv run --no-sync python scripts/reuse_oracle_loras.py --tasks-root "$TASKS_OUT" \
-        --train-tasks "${TRAIN_TASKS_ARR[@]}" \
+        --train-tasks "${TRAIN_TASKS_ARR[@]}" --splits data/splits_v5.json \
         --source-oracle-dir "$V3_ORACLE_DIR" --source-canon-dir "$V3_CANON_DIR" \
         --out-oracle-dir outputs/oracle_loras_v5 --out-canon-dir outputs/oracle_loras_canon_v5 \
         --from-substr _v5_ --to-substr _v3_

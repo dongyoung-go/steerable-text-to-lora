@@ -61,24 +61,37 @@ cp .env.example .env && $EDITOR .env    # .env is gitignored; loaded automatical
 
 ```bash
 cd textual_momentum_grpo
-# 1. MATH training split (hendrycks/competition_math, GATED -- accept terms on the Hub and
-#    `huggingface-cli login` / set HF_TOKEN first, or this fails with a clear error message):
-.venv/bin/python scripts/prepare_math_train.py --out data/train.jsonl
+# 1a. Training pool -- DEFAULT (all run scripts use this unless TMGRPO_TRAIN_DATA=math):
+#     open-r1/OpenR1-Math-220k, `default` config (93.7k rows). Confirmed data-scope decision
+#     2026-08-12: Critique-GRPO (our baseline, arXiv 2506.03106) actually trains on subsets of
+#     this dataset, not MATH -- see configs/base.yaml's data.train_files comment for why (MATH
+#     left Qwen3-8B saturated from step 1 of arm1_floor's run).
+.venv/bin/python scripts/prepare_openr1_train.py --out data/train_openr1.jsonl
+.venv/bin/python scripts/convert_to_verl_parquet.py \
+  --in data/train_openr1.jsonl --out data/train_openr1.parquet --data-source openr1_math
 
-# 2. Eval sets, reused from self_correct_grpo's already-vendored MATH data (Apache-2.0):
+# 1b. MATH training split -- OPT-IN legacy pool (hendrycks/competition_math, GATED -- accept
+#     terms on the Hub and `huggingface-cli login` / set HF_TOKEN first, or this fails with a
+#     clear error message). Only needed if you're intentionally running with
+#     TMGRPO_TRAIN_DATA=math:
+.venv/bin/python scripts/prepare_math_train.py --out data/train.jsonl
+.venv/bin/python scripts/convert_to_verl_parquet.py \
+  --in data/train.jsonl --out data/train.parquet --data-source math
+
+# 2. Eval sets (used for all arms regardless of training pool), reused from self_correct_grpo's
+#    already-vendored MATH data (Apache-2.0):
 .venv/bin/python scripts/prepare_eval_data.py --out-dir data/eval
 #    -> data/eval/math500.jsonl        (500 rows, copied verbatim)
 #    -> data/eval/aime24.jsonl         (30 rows, copied verbatim)
 #    -> data/eval/olympiad_slice.jsonl (200 rows, seeded sample of olympia.jsonl, seed=0)
 
-# 3. Confirm no train/eval leakage:
+# 3. Confirm no train/eval leakage (run against whichever training pool(s) you prepared --
+#    OpenR1-Math-220k's own decontamination is against its own benchmark list, not necessarily
+#    identical to data/eval/*.jsonl, so don't skip this just because it's the default now):
 .venv/bin/python scripts/check_overlap.py \
-  --train data/train.jsonl \
+  --train data/train_openr1.jsonl \
   --eval data/eval/math500.jsonl data/eval/aime24.jsonl data/eval/olympiad_slice.jsonl
 ```
-
-Per the confirmed data-scope decision, there is no NuminaMath augmentation in this minimal pass --
-`data/train.jsonl` is the MATH training split alone.
 
 ## 3. GPU node: pull verl (not runnable here)
 
@@ -151,6 +164,13 @@ python -m verl.trainer.main_ppo \
 # ... arm2_instance_off, arm3_instance_on, arm4_trajectory_off, arm5_trajectory_on
 ```
 
+In practice arm1 (`run_arm1_floor.sh`) and arm5 (`run_arm5_trajectory.sh`) are launched directly as
+CLI-override shell scripts, not via `--config-path=configs/resolved` -- both default to the
+OpenR1-Math-220k training pool and accept `TMGRPO_TRAIN_DATA=math ./run_arm1_floor.sh` to switch
+to the MATH pool instead (see each script's own comment, and `configs/base.yaml`'s
+`data.train_files` for the rationale). Any future arm2/arm3/arm4 run script should follow the same
+pattern for consistency across arms.
+
 Build order: **arm1 -> arm2 -> arm3 -> arm4 -> arm5** (`minimal_experiment_plan.md` section 1).
 Arm 2 must be checked against published Critique-GRPO numbers before trusting arms 3-5 (README
 section 4 success criteria).
@@ -162,3 +182,22 @@ the `w_t` trajectory over training for arms 3/5 (via `tmgrpo.calibration.apply_c
 returned `w_t` array -- log its mean/histogram per step); frontier-model call count and token
 usage (`tmgrpo.llm_client.LLMClient.usage_summary()`); and periodic `tmgrpo.spotcheck.spot_check`
 results for arms 4/5's textual gradients, logged for manual review rather than auto-filtered.
+
+Unconditioned eval accuracy (the first of these) is computed offline with
+`scripts/eval_checkpoint.py`, once a run has produced a checkpoint. It's arm-agnostic (same
+script for arm1_floor through arm5_trajectory_on -- eval is always unconditioned, so there's no
+arm-specific eval logic) and must run under the GPU stack:
+
+```bash
+cd textual_momentum_grpo
+.venv-verl/bin/python scripts/eval_checkpoint.py \
+  --checkpoint checkpoints/tmgrpo/arm1_floor/global_step_300/actor \
+  --arm-name arm1_floor \
+  --out eval_results/arm1_floor_step300.json
+```
+
+This merges the verl FSDP shards into a HF model (cached under `checkpoints_hf/`, so reruns
+against the same checkpoint skip the merge), generates unconditioned completions for
+`data/eval/{math500,aime24,olympiad_slice}.jsonl` via vLLM, scores them with
+`tmgrpo.reward.check_answer`, and writes a JSON report with per-set and overall accuracy. Needs a
+free GPU -- run after the training job has exited or on a separate allocation.

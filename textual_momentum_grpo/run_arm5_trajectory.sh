@@ -1,23 +1,29 @@
 #!/bin/bash
-# Arm 1 (Floor): stock GRPO, no critique/momentum/internalization.
+# Arm 5 (Trajectory, ON/ON -- Ours): momentum-conditioned rollouts + internalization + calibration.
+# README section 4: success criteria are (5) > (4) and (5) > (3).
 # Run this directly in a shell that already has the GPU allocated (e.g. inside an salloc session).
 #
-# trainer.test_freq=-1: periodic MATH500 validation OOM'd the job at step 10, even at 250GB
-# RAM (the training loop itself is stable -- validation's much larger batch is what pushed it
-# over). Evaluate the saved checkpoint separately offline instead of relying on mid-run eval.
+# Requires OPENAI_API_KEY in the environment (or textual_momentum_grpo/.env, see .env.example) --
+# every step calls the frontier model (gpt-5-mini) for the textual gradient / digest / momentum
+# update (tmgrpo/trajectory.py). Fails loudly at the first LLM call if unset, not silently.
+#
+# trainer.test_freq=-1: see run_arm1_floor.sh -- periodic MATH500 validation OOM'd Arm 1's job.
+# Evaluate saved checkpoints separately offline instead of relying on mid-run eval, so Arm 5's
+# comparison against Arm 1 stays apples-to-apples.
 set -euo pipefail
 cd "$(dirname "$0")"
 
+if [ -z "${OPENAI_API_KEY:-}" ] && [ ! -f .env ]; then
+  echo "warning: OPENAI_API_KEY is not set and no .env file found -- tmgrpo.llm_client will fail on the first frontier-model call." >&2
+fi
+
 export VLLM_ATTENTION_BACKEND=TRITON_ATTN
 
-# trainer.logger=[console] alone prints step metrics (reward/KL/entropy/etc.) via print(flush=True)
-# from inside the Ray "TaskRunner" actor -- Ray forwards that to the *driver's stderr*, not the
-# SLURM-captured .out file, so under sbatch it's invisible except by digging through
-# /tmp/ray/session_latest/logs/worker-*.out on the compute node. Adding the `file` backend writes
-# the same per-step metrics as unbuffered JSONL directly to disk, independent of Ray's log
-# forwarding. Overwritten (not appended) each run.
+# See run_arm1_floor.sh: trainer.logger=[console] alone only reaches Ray's driver-stderr log
+# forwarding, invisible in the SLURM-captured .out under sbatch. `file` backend writes unbuffered
+# per-step JSONL straight to disk instead. Overwritten (not appended) each run.
 mkdir -p logs/metrics
-export VERL_FILE_LOGGER_PATH="$(pwd)/logs/metrics/arm1_floor.jsonl"
+export VERL_FILE_LOGGER_PATH="$(pwd)/logs/metrics/arm5_trajectory_on.jsonl"
 
 # Training data: defaults to open-r1/OpenR1-Math-220k (scripts/prepare_openr1_train.py) --
 # Critique-GRPO (our baseline) actually trains on subsets of this, not Hendrycks MATH; MATH left
@@ -38,7 +44,7 @@ if [ ! -f "$TRAIN_FILE" ]; then
   exit 1
 fi
 
-.venv-verl/bin/python -m verl.trainer.main_ppo \
+.venv-verl/bin/python -m tmgrpo.main_tmgrpo \
   algorithm.adv_estimator=grpo algorithm.use_kl_in_reward=false \
   data.train_files=${TRAIN_FILE} data.val_files=data/eval/math500.parquet \
   data.train_batch_size=16 data.max_prompt_length=1024 data.max_response_length=2048 \
@@ -60,6 +66,8 @@ fi
   trainer.total_epochs=30 trainer.total_training_steps=300 trainer.val_before_train=false \
   trainer.test_freq=-1 trainer.save_freq=100 trainer.max_actor_ckpt_to_keep=3 \
   trainer.n_gpus_per_node=1 trainer.nnodes=1 trainer.logger=[console,file] \
-  trainer.project_name=tmgrpo trainer.experiment_name=arm1_floor \
+  trainer.project_name=tmgrpo trainer.experiment_name=arm5_trajectory_on \
   custom_reward_function.path=tmgrpo/verl_hooks.py custom_reward_function.name=compute_score \
-  reward.custom_reward_function.path=tmgrpo/verl_hooks.py reward.custom_reward_function.name=compute_score
+  reward.custom_reward_function.path=tmgrpo/verl_hooks.py reward.custom_reward_function.name=compute_score \
+  +custom.conditioning=momentum +custom.internalization=true +custom.calibration=true \
+  +custom.calibration_w_max=5.0 +custom.frontier_model=gpt-5-mini

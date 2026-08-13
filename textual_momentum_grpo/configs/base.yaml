@@ -15,7 +15,16 @@ algorithm:
   use_kl_in_reward: false  # GRPO uses the actor's own KL loss term instead (below), per verl docs
 
 data:
-  train_files: data/train.parquet
+  # Default training pool: open-r1/OpenR1-Math-220k (scripts/prepare_openr1_train.py -> convert_to_verl_parquet.py),
+  # not Hendrycks MATH -- confirmed data-scope decision 2026-08-12. Critique-GRPO (this project's
+  # baseline, arXiv 2506.03106) actually trains on subsets of OpenR1-Math-220k, not MATH; training
+  # arm1_floor on MATH left Qwen3-8B saturated from step 1 (~0.81-0.94 training-batch accuracy,
+  # flat over 100+ steps), leaving little reward variance for GRPO's group-relative advantage to
+  # learn from. MATH remains available as an explicit opt-in: override to data/train.parquet
+  # (scripts/prepare_math_train.py) if you want the easier/legacy pool -- e.g. via each run
+  # script's TMGRPO_TRAIN_DATA=math env var, or `data.train_files=data/train.parquet` here/on the
+  # CLI if launching straight from this config.
+  train_files: data/train_openr1.parquet
   val_files: data/eval/math500.parquet  # primary eval set for test_freq-interval validation during training
   train_batch_size: 16          # = rollout_batch_size, self_correct_grpo/vendor/ICRL/icrl/hydra_conf/rollout/base.yaml
   max_prompt_length: 1024        # unconfirmed -- ICRL reference uses rollout_max_context_len=16384 for

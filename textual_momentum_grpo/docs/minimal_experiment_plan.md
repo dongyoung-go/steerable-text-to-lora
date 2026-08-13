@@ -37,11 +37,18 @@ conditioning context (momentum vs. critique).
 ICRL's reproduction, giving two independent reference points for the arm (2) sanity check.
 
 **Data:**
-- Training: MATH training split, optionally augmented with NuminaMath.
-- Eval: MATH500 (full) + a held-out slice of OlympiadBench/AIME24.
-- Open (not decided here): exact NuminaMath subset size if augmentation is used, and the exact
-  size/seed of the OlympiadBench/AIME24 held-out slice. Do not guess these — pick them when data
-  prep is actually implemented, informed by how much compute the arm (1)/(2) runs actually take.
+- Training: **[Updated 2026-08-12, supersedes the "MATH, optionally augmented with NuminaMath"
+  line below]** defaults to `open-r1/OpenR1-Math-220k` (`default` config, 93.7k rows), not MATH —
+  this is the pool Critique-GRPO's published numbers (the arm (2) reproduction target) actually
+  come from, and MATH alone left Qwen3-8B saturated from step 1 of arm (1)'s run. MATH remains an
+  explicit opt-in via `TMGRPO_TRAIN_DATA=math`. See `textual_momentum_grpo_README.md` §5 and
+  `docs/build_and_run_guide.md` for the full rationale and the prep commands for both pools.
+  ~~Training: MATH training split, optionally augmented with NuminaMath.~~ (original plan)
+- Eval: MATH500 (full) + a held-out slice of OlympiadBench/AIME24. Unchanged by the above — eval
+  is always on these sets regardless of which training pool an arm uses.
+- Open (not decided here): the exact size/seed of the OlympiadBench/AIME24 held-out slice (now
+  resolved elsewhere — `scripts/prepare_eval_data.py` uses a 200-row seed=0 sample; see that
+  script). The NuminaMath-augmentation-size question below is superseded by the OpenR1 default.
 
 **Compute/memory budget:** single B200 (~180–192GB HBM3e) via verl. Full-precision AdamW does not
 fit alongside a frozen reference-policy copy (~144GB before activations/KV cache/rollout). Plan:
@@ -70,7 +77,8 @@ In build order (§1):
 
 1. verl environment setup + Qwen3-8B loading; confirm the base GRPO loop trains and evaluates
    (arm 1) before adding anything else.
-2. MATH data prep: train split (+ optional NuminaMath), MATH500 eval, held-out
+2. Training/eval data prep: **[Updated 2026-08-12]** OpenR1-Math-220k train pool by default (MATH
+   opt-in, see §2's Data section above), MATH500 eval, held-out
    OlympiadBench/AIME24 slice; reward/verifier wiring (exact-match/equivalence checker — chosen
    per README §5 over agentic-env reward for its simplicity and lack of environment-server
    overhead).
@@ -116,8 +124,9 @@ Collected from above, so they aren't silently assumed during implementation:
 
 - Frontier model choice, call cadence, and prompt templates (§2) for critique / textual gradient /
   digest update / momentum generation.
-- Exact NuminaMath augmentation size (if used) and exact OlympiadBench/AIME24 held-out slice
-  size/seed (§2).
+- ~~Exact NuminaMath augmentation size (if used) and exact OlympiadBench/AIME24 held-out slice
+  size/seed (§2).~~ **[Resolved 2026-08-12]** superseded by the OpenR1-Math-220k default (§2); the
+  held-out slice is a 200-row seed=0 sample (`scripts/prepare_eval_data.py`).
 - `w_max` clip value for the calibration ratio (README §3 step 3).
 - GRPO group size and response length actually used, once real memory numbers from arm (1)/(2) are
   in hand (§2's fallback levers).

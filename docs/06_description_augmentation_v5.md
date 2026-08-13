@@ -207,6 +207,18 @@ built (CPU-tested only, no GPU run yet):
   per-task table joined by stripping the `v3_`/`v5_` infix from task names). Run as:
   `python scripts/compare_downstream_eval.py outputs/eval/downstream_accuracy_full_v3.json outputs/eval/downstream_accuracy_full_v5.json --labels v3 v5`.
 
+## Recon `max_steps` raised 2000 → 4000 (2026-08-12, ahead of the `v5` recon run)
+
+The 2026-08-12 "second round" recon fix (per-group clip/LR, see
+`docs/03_training_validation.md`) was re-verified with a standalone recon-only re-run against
+`recon_v3` before committing to this experiment: collapse is eliminated (`cosine_similarity` rose
+monotonically for the full 2000 steps, ending at 0.128, `best.pt == latest.pt`), but the curve was
+still rising at step 2000, and the cosine LR schedule decays to ~0 by `max_steps`, so that
+flattening tail can't be distinguished from genuine convergence. `configs/recon.yaml`'s
+`max_steps` was bumped 2000 → 4000 (same `warmup_frac`, so warmup scales proportionally) so `v5`'s
+recon run gives the schedule more room to tell the two apart — this affects `v5`'s recon run (and
+any future `v3` re-run) since both read the same shared `configs/recon.yaml`.
+
 ## What's not built yet
 
 Only the actual GPU run and its result logging remain:

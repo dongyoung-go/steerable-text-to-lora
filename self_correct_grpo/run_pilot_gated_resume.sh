@@ -12,15 +12,17 @@
 # loaded, so rollout numbering continues rather than restarting at 0.
 #
 # Caveat: checkpoints are saved with `no_save_optim=true` (see run_pilot_gated.sh's comment on the
-# host-RAM checkpoint-save OOM), so each resume loses Adam's momentum/variance state and restarts
-# the optimizer from a zeroed state -- a minor discontinuity given lr=1e-6, not a correctness bug,
-# but real and worth keeping in mind when reading loss curves across a resume boundary.
+# host-RAM checkpoint-save OOM), so there is no optimizer state to load -- pass
+# no_load_optim/no_load_rng below (Megatron's load_checkpoint hard-errors on a missing 'optimizer'
+# key otherwise) and each resume restarts Adam's momentum/variance from zero. A minor discontinuity
+# given lr=1e-6, not a correctness bug, but real and worth keeping in mind when reading loss curves
+# across a resume boundary.
 #
 # Usage:
 #   ./run_pilot_gated_resume.sh <path/to/previous/run's/checkpoints/dir> [additional hydra overrides...]
 set -euo pipefail
 
-PREV_CHECKPOINTS_DIR="${1:?usage: run_pilot_gated_resume.sh <path/to/previous/run's/checkpoints/dir> [overrides...]}"
+PREV_CHECKPOINTS_DIR="${1:?usage: run_pilot_gated_resume.sh <path/to/prior/training/run/checkpoints/dir> [overrides...]}"
 shift
 
 SELF_CORRECT_GRPO_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
@@ -34,4 +36,6 @@ echo "Resuming from iteration ${RESUME_ITER} in ${PREV_CHECKPOINTS_DIR}"
 
 exec "${SELF_CORRECT_GRPO_DIR}/run_pilot_gated.sh" \
   checkpoint.cli.load="${PREV_CHECKPOINTS_DIR}" \
+  +checkpoint.cli.no_load_optim=true \
+  +checkpoint.cli.no_load_rng=true \
   "$@"

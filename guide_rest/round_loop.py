@@ -61,6 +61,15 @@ def run_step(script: str, extra_args: list[str], timeout: float | None = None, r
     tear down -- see docs/01_train.md) is killed and retried up to `retries`
     times before giving up loudly, instead of silently burning the rest of
     the SLURM walltime the way the original run did.
+
+    `sampling.py`/`eval_heldout.py` call `os._exit(0)` at the end specifically
+    to dodge a vLLM V1 engine teardown deadlock -- but that skips Python's
+    normal multiprocessing cleanup, so vLLM's separate `EngineCore` subprocess
+    can be left running as an orphan that still holds its GPU memory even
+    though the script's own exit code is 0. So the process group is swept
+    unconditionally after every attempt (not just on timeout) before the step
+    is considered done -- otherwise the next step can launch into a GPU that
+    still has the previous step's engine sitting on most of its memory.
     """
     cmd = [sys.executable, str(HERE / script), *extra_args]
     attempts = retries + 1
@@ -74,6 +83,7 @@ def run_step(script: str, extra_args: list[str], timeout: float | None = None, r
             print(f"[round_loop] {script} exceeded {timeout}s timeout on attempt {attempt}/{attempts}; killing and retrying", flush=True)
             _kill_process_group(proc)
             continue
+        _kill_process_group(proc, grace_seconds=5)
         if ret == 0:
             return
         raise subprocess.CalledProcessError(ret, cmd)
